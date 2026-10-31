@@ -24,7 +24,7 @@ macOS 应用的成熟更新方案是 [Sparkle](https://sparkle-project.org/)：a
 | 应用管理（macOS 13 起） | 未取得。Apple 只说明同一开发团队签名的应用可以互相更新，否则拦截并通知用户；ad-hoc 签名没有 Team ID，文档未说明这类包是否受保护 | WWDC22「What's new in privacy」 |
 | 能否轮换 EdDSA 私钥 | 不能。Sparkle 的轮换兜底要求新包满足旧包的 designated requirement，ad-hoc 永远满足不了 | `SUUpdateValidator.m` 第 351 行起 |
 | 以后改用 Developer ID | 兼容。Sparkle 只拒绝「已签名改为不签名」，ad-hoc 改为 Developer ID 时只要 EdDSA 私钥不变即可通过 | `SUUpdateValidator.m` 第 282 行 |
-| 系统版本下限 | 不变。Sparkle 2.10.0 起要求 macOS 12.0（包内二进制 `minos` 为 12.0）；Peach 最近一次发布演练两个架构的 `minimum_macos` 已是 15.0 | Sparkle `CHANGELOG` 2.10.0 节；`release.yml` 运行 41107363667 的构建输出 |
+| 系统版本下限 | 不变。Sparkle 2.10.0 起要求 macOS 12.0（包内二进制 `minos` 为 12.0）；Peach 最近一次成功的发布演练中，两个架构的 `minimum_macos` 已是 15.0 | Sparkle `CHANGELOG` 2.10.0 节；`release.yml` 运行 41107363667（`agent/codex/release-bottlenecks` 分支上的演练，不是标签运行）的构建输出 |
 
 ## 决策（草案）
 
@@ -33,7 +33,7 @@ macOS 应用的成熟更新方案是 [Sparkle](https://sparkle-project.org/)：a
 1. 固定 Sparkle 官方发布包 `Sparkle-2.10.1.tar.xz`（SHA-256 `1a856d2a9edb8e628de88121d7be04cf0e2167f8641650b78fca00b14244cf27`），按 `scripts/fetch_cloudflared_macos.py` 的方式用清单固定版本与摘要，许可证随包放进 `Contents/Resources`。框架 3.0 MB，二进制均为 x86_64 + arm64 双架构。
 2. `scripts/build_macos_standalone.py` 在 PyInstaller 生成 `Peach.app` 之后、`codesign` 之前，把 `Sparkle.framework` 按保留符号链接的方式复制到 `Peach.app/Contents/Frameworks/`。PyInstaller 的 `sys._MEIPASS` 就是这个目录，现有 `amane-runtime` 落在 `Contents/Frameworks/tools/amane-runtime` 可以印证。
 3. 删除框架里的 `XPCServices/`。这两个服务只供沙盒应用使用，官方文档说明非沙盒应用可以移除。
-4. Sparkle 自带的二进制带有 Sparkle 项目的 Developer ID 签名。按由内向外的顺序用 ad-hoc 重签 `Autoupdate`、`Updater.app` 与框架，再签 `Peach.app`，使整个包只有一种签名身份；现有的 `codesign --verify --deep --strict` 继续把关。不开 Hardened Runtime：开启后库验证会拒绝加载 ad-hoc 签名的框架（官方文档的 Library Validation 说明）。
+4. 官方包里的二进制都带签名段，签名者在 Windows 上未取得。按由内向外的顺序用 ad-hoc 重签 `Autoupdate`、`Updater.app` 与框架，再签 `Peach.app`，使整个包只有一种签名身份；现有的 `codesign --verify --deep --strict` 继续把关。不开 Hardened Runtime：开启后库验证会拒绝加载 ad-hoc 签名的框架（官方文档的 Library Validation 说明）。
 
 ### 二、菜单栏进程持有更新器
 
@@ -76,7 +76,7 @@ Sparkle 由 `Autoupdate` 经 LaunchServices 重开应用，不带 LaunchAgent �
 
 ### 四、appcast 的生成与位置
 
-1. **生成。** 标签流水线新增一个仅在标签上运行的 macOS 作业：取得已晋级的两个 DMG 与当前线上 appcast，用官方 `generate_appcast --ed-key-file -` 从标准输入读私钥，追加本版本条目。工具会挂载 DMG 读取包内 `Info.plist`，自动写出 `sparkle:version`、`sparkle:minimumSystemVersion`、`length` 与 `sparkle:edSignature`。用 `--maximum-versions` 只保留最近几版，不生成增量包。`peach:migrationHead` 由发布脚本在生成后补进本版本条目。公开仓库的 GitHub 托管 macOS runner 不计费。
+1. **生成。** 标签流水线新增一个仅在标签上运行的 macOS 作业：取得已晋级的两个 DMG 与当前线上 appcast，用官方 `generate_appcast --ed-key-file - --download-url-prefix https://downloads.peach.video/v<版本>/` 从标准输入读私钥，追加本版本条目；enclosure 地址由前缀加 DMG 文件名组成。工具会挂载 DMG 读取包内 `Info.plist`，自动写出 `sparkle:version`、`sparkle:minimumSystemVersion`、`length` 与 `sparkle:edSignature`。用 `--maximum-versions` 只保留最近几版，不生成增量包。`peach:migrationHead` 由发布脚本在生成后补进本版本条目。公开仓库的 GitHub 托管 macOS runner 不计费。
 2. **架构分开。** 每个架构一份 appcast，地址按构建架构写进 `Info.plist`。在 Apple 芯片上经 Rosetta 运行 x86_64 包时，继续拿到 x86_64 的更新，与 `release_updates.check` 用 `platform.machine()` 选 DMG 的行为一致。不用 2.9 起的 `sparkle:hardwareRequirements`：它只能声明「需要 arm64」，表达不了「只给 x86_64」。
 3. **复用 DMG。** 更新包就是现有 DMG，不新增制品，R2 发布桶的 8 GB 预算不变。DMG 的 SHA-256 与 `SHA256SUMS.txt` 不受影响，EdDSA 签名只写在 appcast 里。
 4. **托管。** feed 地址放在自有域名 `downloads.peach.video`，以后换存储后端不必改已装客户端。appcast 按 `releases.json` 的方式设一分钟缓存，在 DMG 公开并校验之后才上传。enclosure 指向同一 R2 源的 DMG：Sparkle 每个条目只有一个下载地址，没有备用源。
@@ -124,7 +124,7 @@ Sparkle 由 `Autoupdate` 经 LaunchServices 重开应用，不带 LaunchAgent �
 - **应用管理保护。** ad-hoc 签名、没有 Team ID 的 `Autoupdate` 替换同为 ad-hoc 的 `Peach.app` 时，macOS 13、14、15、26 是否拦截或弹出「想要管理其他应用」的通知：未取得。如果拦截，用户须在「系统设置 > 隐私与安全性 > 应用管理」放行一次，并确认放行能否跨版本保留。
 - **Gatekeeper 与 `gktool scan`。** 未隔离的 ad-hoc 包在 macOS 15 与 26 上替换后能否直接启动，`gktool scan` 对 ad-hoc 包的返回值：未取得。
 - **pyobjc 调用委托。** `objc.loadBundle` 加载框架后，带 block 参数的委托方法（`untilInvokingBlock:`、`immediateInstallationBlock:`）需要用 `objc.registerMetaDataForSelector` 声明 block 签名才能从 Python 调用，`supportsGentleScheduledUpdateReminders` 要按只读属性实现：均未取得。
-- **`generate_appcast` 保留自定义元素。** 再次运行时旧条目里补写的 `peach:migrationHead` 是否原样保留：未取得。
+- **`generate_appcast` 保留旧条目。** 更新目录里只放本版本 DMG 时，旧条目及其中补写的 `peach:migrationHead`、按版本不同的 enclosure 前缀是否原样保留：未取得。
 - **重开后的数据根。** 经 LaunchServices 重开、不带 `--data-root` 时，独立包能否找到 LaunchAgent 指定的同一数据根：未取得。
 - **安装位置权限。** 应用不在当前用户可写的位置（例如由另一个管理员拖入「应用程序」）时 Sparkle 的授权流程：未取得。
 - **与 launchd 自动拉起的配合。** 菜单栏「异常退出后由 launchd 拉起」的改动尚在进行，`KeepAlive` 的最终形态未取得；本方案要求更新时的正常退出不会触发拉起。
