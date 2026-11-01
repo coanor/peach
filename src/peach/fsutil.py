@@ -44,10 +44,53 @@ def replace_with_retry(
         try:
             os.replace(source, destination)
             return
-        except OSError:
+        except OSError as error:
+            if os.name == 'nt' and getattr(error, 'winerror', None) == 5 and source.is_file():
+                try:
+                    _replace_open_windows_file(source, destination)
+                except OSError:
+                    pass
+                else:
+                    return
             if time.monotonic() >= deadline:
                 raise
             sleep(0.25)
+
+
+def _replace_open_windows_file(source: Path, destination: Path) -> None:
+    """共享删除的读者继续读旧文件，新打开的句柄读取完整替换结果。"""
+    import ctypes
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                  ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    kernel.CreateFileW.restype = wintypes.HANDLE
+    kernel.SetFileInformationByHandle.argtypes = [wintypes.HANDLE, ctypes.c_int,
+                                                 ctypes.c_void_p, wintypes.DWORD]
+    kernel.SetFileInformationByHandle.restype = wintypes.BOOL
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+
+    name = str(destination.absolute()).encode('utf-16-le', errors='surrogatepass')
+
+    class RenameInfo(ctypes.Structure):
+        _fields_ = [('flags', wintypes.DWORD), ('root', wintypes.HANDLE),
+                    ('length', wintypes.DWORD), ('name', wintypes.WCHAR * (len(name) // 2 + 1))]
+
+    info = RenameInfo()
+    # FILE_RENAME_REPLACE_IF_EXISTS | FILE_RENAME_POSIX_SEMANTICS；保留只读与共享访问保护。
+    info.flags, info.length = 3, len(name)
+    ctypes.memmove(ctypes.addressof(info) + RenameInfo.name.offset, name, len(name))
+    # DELETE、共享读写删除、OPEN_EXISTING、OPEN_REPARSE_POINT；改名不跟随源符号链接。
+    handle = kernel.CreateFileW(str(source.absolute()), 0x10000, 7, None, 3, 0x00200000, None)
+    if handle == ctypes.c_void_p(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        # FileRenameInfoEx；不支持此信息类的文件系统仍交回原有有界重试。
+        if not kernel.SetFileInformationByHandle(handle, 22, ctypes.byref(info), ctypes.sizeof(info)):
+            raise ctypes.WinError(ctypes.get_last_error())
+    finally:
+        kernel.CloseHandle(handle)
 
 
 @contextmanager

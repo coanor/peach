@@ -60,6 +60,8 @@ YuNet 与 SFace 沿用既有模型哈希校验，Python 读取模型字节后交
 
 状态文件写入沿用 `fsutil.atomic_write_text`。补入 FriendlyPasser 的 [PR #120](https://github.com/peach-mitao/peach/pull/120) 固定提交 `b586ff907aa01b48432e51b6101b7ce4bc7f8126` 的 Windows 读句柄验证，检查实际 WinError、读者关闭、完整 JSON 发布和临时文件清理；不增加另一套保存策略。
 
+Windows 的 `os.replace` 因已打开的目标文件返回 WinError 5 时，普通文件复用系统 `SetFileInformationByHandle` 的 `FileRenameInfoEx`，指定 `REPLACE_IF_EXISTS | POSIX_SEMANTICS`。允许共享删除的旧句柄继续读取旧内容，新读取者取得完整新文件；不支持该操作、拒绝共享删除或目标只读时沿用原有有界重试。接口和句柄语义见 [Microsoft 文档](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_file_rename_information)。标准库 `ctypes` 完成调用，不新增依赖；不采用 `ReplaceFileW`，因为其部分失败状态可能使旧路径消失。原生 Windows 回归覆盖保持读句柄打开时发布完整 JSON、Unicode 文件名、失败时保留原内容与临时文件清理。
+
 ## 发布依赖接管来源
 
 依赖清单复用 Dependabot 的独立 PR 差集，版本与完整依赖图由当前清单和锁文件确定。相邻修改保留主线消费者并重算锁；npm vendor 与前端包使用项目入口重建，许可证和来源记录随资源分发。接管器分别识别应用与 amane 桥的清单，并以实际接管提交确认完成；普通 PR 引用不构成采用。
