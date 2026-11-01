@@ -202,3 +202,36 @@ class CollectionConcurrencyTests(unittest.TestCase):
         self.assertEqual(dict(calls)[1], dict(calls)[2])
         self.assertCountEqual(completions, [(1, True), (2, True), (3, False)])
         self.assertEqual(state['checked'], 3)
+
+    def test_worker_progress_keeps_the_paused_time_in_its_deadline(self):
+        """暂停后下一条来源日志沿用已平移的单片截止时间。"""
+        from peach.library_collection import collect
+        with TemporaryDirectory() as folder:
+            control = ProcessingControl(Path(folder).resolve() / 'control.json')
+            token = CURRENT.set(control)
+            row = dict(id=1, name='ABC-123', code='ABC-123', path='ABC-123')
+            deadlines = []
+            class Remote:
+                _factory = True
+                def fork(self):
+                    return self
+                def close(self):
+                    pass
+                def collect(self, *args, **options):
+                    options['update'](current_started_at=10, current_deadline_at=20)
+                    on_owner(setattr, control, 'paused_seconds', 100)
+                    options['update'](collection_event={'active_source': {'key': 'javbus'}})
+                    return [], 0
+            state = dict(speed_mode='low', issue_count=0, covers=0)
+            def update(**values):
+                if 'collection_event' in values:
+                    deadlines.append(values['current_deadline_at'])
+                state.update(values)
+            try:
+                collect([(row, row['code'], False, {}, [], True)], Remote(), Mock(), Path('.'), [],
+                    state=state, completed_count=0, stages_of=lambda _: {'metadata'}, guard=Mock(),
+                    update=update, issue=Mock(), publish=Mock(), groups={}, poster_failed=set(),
+                    checkpoints=Mock(), flush_candidates=lambda: None, scoped_groups=lambda: {})
+            finally:
+                CURRENT.reset(token)
+            self.assertEqual(deadlines, [120])

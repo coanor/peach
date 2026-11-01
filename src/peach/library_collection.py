@@ -58,12 +58,22 @@ def collect(prepared, remote, traffic, cover_root, covered, *, state, completed_
         update(checked=completed_count + done, candidates=len(scoped_groups()), **current)
 
     def work_item(entry):
+        from .processing_control import CURRENT
+        from .task_control import CURRENT as TASK_CONTROL
         row, code, verify, fields, *_ = entry
         on_owner(begin, row)
         progress = dict(current_asset_id=row['id'], current_asset_name=str(row['name'] or ''),
                         current_action='querying_metadata', current_started_at=None, current_deadline_at=None)
         problems = []
+        control = CURRENT.get() or TASK_CONTROL.get()
+        paused = control.paused_seconds if control is not None else 0
         def item_update(**values):
+            nonlocal paused
+            now_paused = control.paused_seconds if control is not None else 0
+            for key in ('current_started_at', 'current_deadline_at'):
+                if progress[key] is not None:
+                    progress[key] += now_paused - paused
+            paused = now_paused
             progress.update({key: value for key, value in values.items() if key in progress})
             on_owner(update_item, row, {**progress, **values})
         def item_issue(*args, **kwargs):
