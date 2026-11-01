@@ -111,7 +111,7 @@ class ProcessingTraffic:
         from .processing_storage import ProcessingStorage
         self.storage = ProcessingStorage(config)
         self.plan.completed.update(previous.get('completed_work', []))
-        self.active_sample = None
+        self._active_sample = ContextVar('metadata_traffic_sample', default=None)
         self.refresh_plan()
         self.seed_inventory(inventory_rows)
 
@@ -162,16 +162,24 @@ class ProcessingTraffic:
         with self.lock:
             profile = self.plan.profiles.get(token)
             self.active_sample = dict(profile=profile, blocked=set(),
-                before={key: row['used_bytes'] for key, row in self.rows.items()}) if profile else None
+                used={}) if profile else None
+
+    @property
+    def active_sample(self):
+        return self._active_sample.get()
+
+    @active_sample.setter
+    def active_sample(self, value):
+        self._active_sample.set(value)
 
     def finish_work(self, stage, code=None, *, successful=True):
         with self.lock:
             if stage == 'metadata' and self.active_sample:
                 sample, self.active_sample = self.active_sample, None
                 if successful:
-                    for key, before in sample['before'].items():
+                    for key, amount in sample['used'].items():
                         if not self.rows[key]['root'] and key not in sample['blocked']:
-                            self.plan.history.observe(sample['profile'] + ':' + key, self.rows[key]['used_bytes'] - before)
+                            self.plan.history.observe(sample['profile'] + ':' + key, amount)
                     self.plan.calibrate()
                     self.plan.history.save()
             self.plan.finish(stage, code)
@@ -206,6 +214,9 @@ class ProcessingTraffic:
             if not row['network']:
                 return
             row['used_bytes'] += int(size)
+            if self.active_sample is not None:
+                used = self.active_sample['used']
+                used[key] = used.get(key, 0) + int(size)
             if threading.get_ident() != self.owner or time.monotonic() - self.published_at < 0.5:
                 return
             self.published_at = time.monotonic()

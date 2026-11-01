@@ -286,6 +286,27 @@ def checkpoint():
         control.checkpoint()
 
 
+@contextmanager
+def parked():
+    """等待任务线程提交回执时，本工作线程已离开在途 I/O。"""
+    control = CURRENT.get()
+    if control is None:
+        yield
+        return
+    with control.lock:
+        previous = {key: control.operations[key] for key, owner in control.owners.items()
+                    if owner == threading.get_ident()}
+        for key in previous:
+            control.operations[key] = True
+    try:
+        yield
+    finally:
+        with control.lock:
+            for key, value in previous.items():
+                if key in control.operations:
+                    control.operations[key] = value
+
+
 def controlled(function):
     @wraps(function)
     def call(*args, **kwargs):

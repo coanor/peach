@@ -283,6 +283,37 @@ class TaskControlTests(unittest.TestCase):
         self.assertEqual(sorted(after_step), [0, 1])
         self.assertEqual(self.store.get(run_id).status, 'succeeded')
 
+    def test_workers_waiting_for_collection_receipts_can_confirm_pause(self):
+        """等待任务线程回执的作品已停稳，暂停后可继续或取消。"""
+        from peach.collection_concurrency import CollectionPool, on_owner
+        def check(action):
+            entered = [self.event(), self.event()]
+            release = self.event()
+            completed = []
+            def operation(index):
+                with task_control.operation():
+                    entered[index].set()
+                    release.wait(5)
+                    on_owner(task_control.checkpoint)
+                completed.append(index)
+            def work(job, identity):
+                CollectionPool().run([0, 1], operation, lambda: 2)
+                job.update(identity, status='complete')
+            job, original = self.start(work)
+            self.assertTrue(all(event.wait(5) for event in entered))
+            run_id = original['run_id']
+            task_control.request(self.store, run_id, 'pause')
+            release.set()
+            self.wait_until(lambda: self.state(run_id)['state'] == 'paused')
+            self.assertEqual(completed, [])
+            task_control.request(self.store, run_id, action)
+            job.thread.join(5)
+            self.assertFalse(job.thread.is_alive())
+            self.assertEqual(self.store.get(run_id).status, 'succeeded' if action == 'resume' else 'cancelled')
+        for action in ('resume', 'cancel'):
+            with self.subTest(action=action):
+                check(action)
+
     def test_pause_stops_both_owned_children_and_cancel_reaps_them_before_settlement(self):
         paths = [self.root / f'heartbeat-{index}' for index in range(2)]
         errors = []

@@ -407,6 +407,8 @@ Folia（`chthollyphile/folia-major`，AGPL-3.0，revision `9a01e788ed52d25ea01b1
 
 馆藏采集来源设置复用 `metadata_routes` 的内容分类与原有来源链、`SourceTransport` 的请求边界、`verified_cover` 的图片检查及 `fsutil.atomic_write_text`。`collection_source_policy` 只保存本机优先和停用来源，不复制解析器、凭证或落库判据；页面复用 BoardUI Checkbox、Select、Button 与现有拖动排序，无新增依赖。未指定偏好时沿用原有查询行为。
 
+作品并发复用标准库 `ThreadPoolExecutor`、`Future`、`Queue` 和 `ContextVar`，由 `collection_concurrency` 将候选、日志与检查点回执交回任务线程。`library_collection` 按番号分组并沿用处理强度；来源连接独立，`HostLimiter`、冷却和 `SourceTransport` 预算共用。流量样本与跳过意图按当前作品隔离，无新增依赖。
+
 ## 脚本目录与参数
 
 脚本路径读取 `settings_file` 的目录配置。`sync_sha1_115.py` 的 Cookie 默认位于 `secrets/115-cookies.txt`，复核 CSV 默认位于 `review/115-sha1重复.csv`；可通过 `--cookie-file`、`--dupes-out` 或对应的 `PEACH_115_COOKIE_FILE`、`PEACH_115_DUPES_OUT` 指定现有文件。目录排序偏好使用可重复的 `--deprioritize-dir`。TLS 两种 shell 共用 `resolve_tls_directory.py`，显式 `-OutDir`／`PEACH_TLS_DIR` 优先；`rehome_unknown_jav.py` 的目标账本根由 `--ledger-unknown-root` 明确指定。

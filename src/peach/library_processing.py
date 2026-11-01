@@ -268,9 +268,8 @@ COLLECTED_FIELDS = ('title', 'performers', 'studio', 'release_date', 'tags')
 COLUMN_OF = {'title': 'catalog_title'}
 
 #: 一趟任务向外部来源要的总量。三条闸门里谁先到谁生效，之后每部片只记「本趟…已用完」。
-#: 一部片问三家目录站、每家 1～2 次，所以 6000 次约等于 1500 部。请求是一条接一条发的，
-#: 同一主机两问之间隔着主机间隔（默认 2 秒，javdb 3 秒，见 `SOURCE_INTERVALS`），不同主机的间隔
-#: 互不阻塞；6000 次按 2 秒算也要三个多小时，和 4 小时的时间闸门同一量级，哪条先到都说得通。
+#: 一部片问三家目录站、每家 1～2 次，所以 6000 次约等于 1500 部。并发工作线程共用一份预算，
+#: 同一主机两问之间仍隔着主机间隔（默认 2 秒，javdb 3 秒，见 `SOURCE_INTERVALS`），不同主机的等待互不阻塞。
 #: 封面与资料页合计每次约 250 KB，1 GiB 装得下这 6000 次。
 MAX_SOURCE_REQUESTS = 6000
 MAX_SOURCE_BYTES = 1024 * 1024 * 1024
@@ -332,14 +331,14 @@ class LibraryMetadataProvider:
     `CredentialStore` 自己会拼上那一层。多给一层的表现不是报错，是每个来源都读成
     「没有凭据」——采集设置里贴好的 JavBus、javdb Cookie 一条都不会被带上。
     """
-    def __init__(self, secrets_root, *, tools_root=None, policy_root=None):
+    def __init__(self, secrets_root, *, tools_root=None, policy_root=None, budget=None):
         from .scraping_access import SourceTransport
         self.secrets_root = Path(secrets_root)
         self.policy_root = Path(policy_root) if policy_root is not None else None
         #: amane 桥的 venv 所在的工具区（`<Peach 数据目录>/tools`）；不给就用配置里的默认位置。
         self.tools_root = Path(tools_root) if tools_root is not None else None
         self.transport = collection_log.CollectionTransport(
-            SourceTransport(secrets_root, policy_root=self.policy_root, max_requests=MAX_SOURCE_REQUESTS,
+            SourceTransport(secrets_root, policy_root=self.policy_root, budget=budget, max_requests=MAX_SOURCE_REQUESTS,
                             max_bytes=MAX_SOURCE_BYTES, max_seconds=MAX_SOURCE_SECONDS),
             2.0, limiter=SOURCE_LIMITER)
 
@@ -392,7 +391,7 @@ class LibraryMetadataProvider:
         from . import metadata_amane, peach_proxy
         from .config import TOOLS_DIR
         from .jav_cover_fetch import Unavailable
-        from .scraping_access import SourcePaused, pause_source, values_for, record_source_check
+        from .scraping_access import SourcePaused, pause_source, values_for
         from .processing_control import checkpoint
         checkpoint('network')
         timeout = None
@@ -432,18 +431,7 @@ class LibraryMetadataProvider:
             'status': 'failed', 'reason': 'parse_error', 'detail': '桥未返回有效的来源记录',
         } for site in sites}
         found, failures = metadata_amane.split_report(code, {**report, 'sites': reports})
-        for site, result in reports.items():
-            error = failures.get(site)
-            collection_log.emit(site, SOURCE_LABELS.get(site, site), 'querying_metadata',
-                                'success' if error is None else 'not_found' if error.kind == 'not_found' else 'failed',
-                                reason=collection_log.redact(error.detail)[:1000] if error else '')
-            record_source_check(self.secrets_root, site, 'metadata', {
-                'checked_at': time.time(), 'ok': result.get('status') == 'found' and error is None,
-                'kind': error.kind if error else 'ok',
-                'reason': error.detail if error else 'parsed',
-                'status': metadata_amane.diagnostic_status(result.get('http_status')),
-                'elapsed_s': result.get('elapsed_s', 0),
-            })
+        self._record_bridge_checks(reports, failures)
         problems, held = [], 0
         for site, error in failures.items():
             action = metadata_amane.cooldown_action(error)
@@ -460,6 +448,23 @@ class LibraryMetadataProvider:
         if held and held == len(problems):
             return SourcePaused('；'.join(problems))
         return Unavailable('；'.join(problems))
+
+    def _record_bridge_checks(self, reports, failures):
+        """桥的逐来源回执同时更新任务日志和来源连接诊断。"""
+        from . import metadata_amane
+        from .scraping_access import record_source_check
+        for site, result in reports.items():
+            error = failures.get(site)
+            collection_log.emit(site, SOURCE_LABELS.get(site, site), 'querying_metadata',
+                                'success' if error is None else 'not_found' if error.kind == 'not_found' else 'failed',
+                                reason=collection_log.redact(error.detail)[:1000] if error else '')
+            record_source_check(self.secrets_root, site, 'metadata', {
+                'checked_at': time.time(), 'ok': result.get('status') == 'found' and error is None,
+                'kind': error.kind if error else 'ok',
+                'reason': error.detail if error else 'parsed',
+                'status': metadata_amane.diagnostic_status(result.get('http_status')),
+                'elapsed_s': result.get('elapsed_s', 0),
+            })
 
     def community(self, code, *, deadline=None, route=None, known=(), absent=(), received=lambda found: None):
         """官方渠道落空时问综合索引那一档，返回 `[(来源, 资料)]`。
@@ -681,8 +686,8 @@ class LibraryMetadataProvider:
         GraphQL（`sources/dmm.py`，ADR-0059）。"""
         return self.site(source, code, deadline=deadline)
 
-    def cover(self, code, cover_root, *, deadline=None, evidence=(), snapshots=(), absent=()):
-        """官方大图优先；没有就用社区来源里两个图源对得上的那张；再没有就用官方小图。
+    def _choose_cover(self, code, *, deadline=None, evidence=(), snapshots=(), absent=()):
+        """按来源偏好取得并核验封面候选，同时保留未取得来源的原因。
 
         小图也比没有封面强（素人系官方图只有 300×300），但社区来源的大图只有被另一个
         图源印证过才用，官方小图本身也算一个图源（ADR-0030）。
@@ -700,10 +705,6 @@ class LibraryMetadataProvider:
         from .community_catalog import verified_cover
         from .jav_cover_fetch import SMALL_MIN_WIDTH, Unavailable, best_cover
         from .scraping_access import SourcePaused
-        target = cover_root / (code + '.jpg')
-        if cover_settled(target):
-            return False
-        kept = measure_image_file(target)
         mark = self.excused
         official, verified_by, problems, siblings = None, (), [], ()
         chosen, answers = None, None
@@ -755,6 +756,16 @@ class LibraryMetadataProvider:
                     problems.append((describe_failure(error), source_paused(error)))
         if chosen is None:
             raise _unreached(problems) if problems else NotFound('官方与社区来源都没有这部片的封面')
+        return chosen, official, verified_by, problems
+
+    def cover(self, code, cover_root, *, deadline=None, evidence=(), snapshots=(), absent=()):
+        """只在来源和质量检查通过时原子安装封面，未提高质量时保留本机图片。"""
+        target = cover_root / (code + '.jpg')
+        if cover_settled(target):
+            return False
+        kept = measure_image_file(target)
+        chosen, official, verified_by, problems = self._choose_cover(code,
+            deadline=deadline, evidence=evidence, snapshots=snapshots, absent=absent)
         candidate, size, data = chosen
         # 官方图可替换社区转存图；同类来源按像素面积升级。
         from .community_catalog import origin_of
@@ -1504,6 +1515,7 @@ class _RemoteSession:
         self._config = config
         self._factory = provider_factory
         self._provider = None
+        self._budget = None
         self.misses = misses
         #: 用户对每种内容类型的来源链覆盖，形状见 `metadata_routes.parse_route_overrides`。
         self._routes = routes or None
@@ -1517,8 +1529,22 @@ class _RemoteSession:
             self._provider = (self._factory() if self._factory
                               else LibraryMetadataProvider(self._config.directory('secrets'),
                                   tools_root=self._config.directory('tools'),
-                                  policy_root=self._config.directory('state')))
+                                  policy_root=self._config.directory('state'), budget=self._budget))
         return self._provider
+
+    def fork(self):
+        """每个工作线程独立连接和单片缓存；共享来源间隔、总预算及无结果记忆。"""
+        from .collection_concurrency import on_owner
+        owner = self
+        class Misses:
+            def fresh(self, *args):
+                return on_owner(owner.misses.fresh, *args)
+            def record(self, *args):
+                return on_owner(owner.misses.record, *args)
+        remote = _RemoteSession(self._config, self._factory, Misses(),
+                                retrying=not self._consult, routes=self._routes)
+        remote._budget = self._budget
+        return remote
 
     def reset(self):
         if self._provider is not None and hasattr(self._provider, 'reset'):
@@ -3018,30 +3044,11 @@ def process_library(config, db_path, candidate_root, cover_root, *, location='co
                                                      | blocked)
                 prepared = [entry for entry in prepared if entry[0]['id'] not in blocked]
                 update(current_action='', current_started_at=None, current_deadline_at=None)
-            for position, (row, code, verify_existing, local_fields, local_entries, local_ok) in enumerate(prepared):
-                local_ok = local_ok and row['id'] not in poster_failed
-                guard.check()
-                issues_before = state['issue_count']
-                update(stage='采集缺失资料', checked=completed_count + position,
-                       total=completed_count + len(prepared), current_asset_id=row['id'],
-                       current_asset_name=Path(str(row['name'] or '')).name)
-                target_key = f"asset:{row['id']}"
-                missing = list(COLLECTED_FIELDS) if verify_existing else _missing_fields(row, local_fields)
-                found, covers = _collect_allowed(
-                    remote, traffic, row, code, missing, stages_of(row['path']), cover_root, covered,
-                    update=update, issue=issue,
-                    answered=() if verify_existing else _answered_sources(groups, target_key, missing),
-                    received=lambda entries, row=row, code=code, fields=local_fields, verify=verify_existing:
-                        publish(row, code, fields, verify, entries),
-                    succeeded=lambda before=issues_before: state['issue_count'] == before)
-                state['covers'] += covers
-                update(stage='保存待确认资料', current_action='writing_candidates',
-                       current_started_at=time.time(), current_deadline_at=None)
-                checkpoints.queue_metadata(row, local_entries + found if local_ok else [], issues_before)
-                flush_candidates()
-                update(checked=completed_count + position + 1, candidates=len(scoped_groups()),
-                       current_asset_id=None, current_asset_name='', current_action='',
-                       current_started_at=None, current_deadline_at=None)
+            from .library_collection import collect
+            collect(prepared, remote, traffic, cover_root, covered, state=state,
+                completed_count=completed_count, stages_of=stages_of, guard=guard,
+                update=update, issue=issue, publish=publish, groups=groups, poster_failed=poster_failed,
+                checkpoints=checkpoints, flush_candidates=flush_candidates, scoped_groups=scoped_groups)
             flush_candidates(force=True)
             update(estimate_pending={}, stage='整理采集结果', checked=0, total=0)
             # 候选完整落盘后立即执行调用方注入的窄规则，不再等人打开复核页才触发。

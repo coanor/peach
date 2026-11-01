@@ -13,6 +13,7 @@ from contextvars import ContextVar
 from .fsutil import atomic_write_text
 
 CURRENT = ContextVar('peach_library_processing_control', default=None)
+_ITEM = ContextVar('peach_library_processing_item', default=None)
 _CONTROLS = {}
 _LOCK = threading.Lock()
 
@@ -27,19 +28,20 @@ def processing_item(asset_id):
     if control is None:
         yield
         return
-    with control.lock:
-        control.current_asset_id = asset_id
+    token = _ITEM.set((control, asset_id))
     try:
         control.check_item()
         yield
         control.check_item()
     finally:
-        with control.lock:
-            control.refresh(force=True)
-            control.current_asset_id = None
-            if control.skip_asset_id == asset_id:
-                control.skip_asset_id = None
-                control._save()
+        try:
+            with control.lock:
+                control.refresh(force=True)
+                if control.skip_asset_id == asset_id:
+                    control.skip_asset_id = None
+                    control._save()
+        finally:
+            _ITEM.reset(token)
 MODES = ('low', 'standard', 'high')
 MODE_FACTORS = {'low': 1.8, 'standard': 1.0, 'high': 0.75}
 IO_INTERVALS = {
@@ -106,7 +108,8 @@ def checkpoint(kind='work'):
     task_checkpoint()
     control = CURRENT.get()
     if control is not None:
-        control.checkpoint(kind)
+        from .collection_concurrency import on_owner
+        on_owner(control.checkpoint, kind)
 
 
 def low_mode():
@@ -172,6 +175,15 @@ def deadline_after(seconds):
 
 class ProcessingControl:
     @property
+    def current_asset_id(self):
+        item = _ITEM.get()
+        return item[1] if item is not None and item[0] is self else self._current_asset_id
+
+    @current_asset_id.setter
+    def current_asset_id(self, value):
+        self._current_asset_id = value
+
+    @property
     def paused_seconds(self):
         from .task_control import CURRENT as TASK_CONTROL
         control = TASK_CONTROL.get() if CURRENT.get() is self else None
@@ -236,7 +248,8 @@ class ProcessingControl:
         if self.cancelled:
             from .jobs import JobCancelled
             raise JobCancelled('用户停止任务')
-        if self.current_asset_id is not None and self.skip_asset_id == self.current_asset_id:
+        asset_id = self.current_asset_id
+        if asset_id is not None and self.skip_asset_id == asset_id:
             raise ItemSkipped('已跳过当前影片')
 
     def request(self, action, job_id=None, mode=None):

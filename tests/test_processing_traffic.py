@@ -5,6 +5,8 @@ import sqlite3
 import subprocess
 import tempfile
 import unittest
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
@@ -369,6 +371,26 @@ class ProcessingTrafficTests(unittest.TestCase):
         with patch.object(restored.plan.remote, '_chain', return_value=('r18dev', 'javdb')), patch.object(restored.plan, '_ready', return_value=True):
             restored.refresh_plan([self._video()])
             self.assertEqual(restored.plan.units['metadata:ABW-001']['metadata-proxy'], 1000 * 1024)
+
+    def test_concurrent_metadata_samples_count_only_their_own_downloads(self):
+        """并发作品分别校准流量，总用量仍等于实际下载之和。"""
+        traffic = ProcessingTraffic(self.config, self.db, 'collect')
+        barrier = threading.Barrier(2)
+        def work(number):
+            code = f'ABW-{number:03}'
+            traffic.start_metadata(code)
+            with traffic.bind(), download_route(True):
+                record_download(number * 1000)
+            barrier.wait(timeout=5)
+            traffic.finish_work('metadata', code)
+        with patch.object(traffic.plan.remote, '_chain', return_value=('r18dev',)), \
+                patch.object(traffic.plan, '_ready', return_value=True):
+            traffic.refresh_plan([{**self._video(), 'code': f'ABW-{number:03}'} for number in (1, 2)])
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                list(executor.map(work, (1, 2)))
+        samples = [value for values in traffic.plan.history.samples.values() for value in values]
+        self.assertCountEqual(samples, [1000, 2000])
+        self.assertEqual(traffic.rows['metadata-proxy']['used_bytes'], 3000)
 
     def test_failed_incomplete_and_cached_metadata_are_not_average_samples(self):
         traffic = ProcessingTraffic(self.config, self.db, 'collect')

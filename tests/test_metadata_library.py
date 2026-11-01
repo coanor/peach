@@ -590,8 +590,38 @@ class LibraryNfoTests(unittest.TestCase):
         with self.assertRaises(KeyboardInterrupt), patch('peach.library_processing._generate_previews', side_effect=previews):
             process_library(config, db, self.root / 'generated', self.root / 'covers',
                             provider_factory=lambda: provider, database=LedgerDatabase(db))
-        self.assertEqual(seen, [[('本地 ABW-358',), ('本地 ABW-359',)]])
+        self.assertTrue(seen)
+        for observed_titles in seen:
+            self.assertEqual(observed_titles, [('本地 ABW-358',), ('本地 ABW-359',)])
         self.assertTrue(read_rows(self.root / 'generated/library-metadata-field-candidates.csv'))
+
+    @windows_ledger_roots
+    def test_distinct_titles_query_concurrently_and_commit_their_own_fields(self):
+        """标准模式同时采集两部，候选和自动采纳仍归各自影片。"""
+        media = self.root / 'media'
+        media.mkdir()
+        for code in ('ABW-358', 'ABW-359'):
+            (media / f'{code}.mp4').write_bytes(b'video')
+        db = fresh_ledger(self.root)
+        config = PeachConfig(self.root, self.root / 'config.toml', present=True,
+                             locations={'local': (str(media),)})
+        barrier = threading.Barrier(2)
+        def factory():
+            provider = stub_provider()
+            def query(code, source, **kwargs):
+                barrier.wait(timeout=5)
+                return {'id': code, 'title': f'标题 {code}', 'maker': 'Prestige'}
+            provider.query.side_effect = query
+            return provider
+        with patch('peach.library_processing._asks_cover', return_value=False), \
+                patch('peach.library_processing._generate_previews', return_value=0):
+            result = process_library(config, db, self.root / 'generated', self.root / 'covers',
+                provider_factory=factory, database=LedgerDatabase(db), stage='all',
+                route_overrides='censored=r18dev', speed_mode='standard')
+        with closing(sqlite3.connect(db)) as connection:
+            titles = dict(connection.execute('SELECT code, catalog_title FROM asset'))
+        self.assertEqual(titles, {code: f'标题 {code}' for code in ('ABW-358', 'ABW-359')})
+        self.assertEqual(result['checked'], 2)
 
     @windows_ledger_roots
     def test_confirmed_online_fields_are_committed_while_cover_fetch_is_pending(self):
@@ -3136,7 +3166,13 @@ class LibraryWatchdogTests(unittest.TestCase):
         config = self._config(media)
         provider = self._provider()
         # ABW-101 在 r18.dev 那一问就用尽预算；ABW-102 的 r18.dev 只答厂牌，接着问 DMM 兜底。
-        provider.query.side_effect = [DeadlineExceeded('预算'), provider.query.return_value, NotFound('HTTP 404')]
+        def query(code, source, **kwargs):
+            if code == 'ABW-101':
+                raise DeadlineExceeded('预算')
+            if source == 'dmm':
+                raise NotFound('HTTP 404')
+            return provider.query.return_value
+        provider.query.side_effect = query
         result = process_library(config, db, self.root / 'generated', self.root / 'covers',
                                  provider_factory=lambda: provider)
         with closing(sqlite3.connect(db)) as connection:
@@ -3144,7 +3180,7 @@ class LibraryWatchdogTests(unittest.TestCase):
         self.assertEqual(result['retryable_asset_ids'], [ids['ABW-101.mp4']])
         self.assertEqual(result['status'], 'failed')
         self.assertEqual(result['outcome'], 'partial')
-        self.assertEqual([item.args for item in provider.query.call_args_list],
+        self.assertCountEqual([item.args for item in provider.query.call_args_list],
                          [('ABW-101', 'r18dev'), ('ABW-102', 'r18dev'), ('ABW-102', 'dmm')])
         self.assertEqual(provider.reset.call_count, 1)
 

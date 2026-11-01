@@ -134,7 +134,8 @@ def cooldown_state(root: Path, source: str) -> tuple[float, int]:
 def _record(root: Path, source: str) -> tuple[float, int, str]:
     """`(冷却到几点, 连着撞了几次, 走的哪条路)`；没有记录或记录坏了都按 `(0, 0, VIA_HTTP)`。"""
     try:
-        record = json.loads(cooldown_path(root, source).read_text(encoding="utf-8"))
+        with _LOCK:
+            record = json.loads(cooldown_path(root, source).read_text(encoding="utf-8"))
         return float(record["until"]), int(record.get("blocks") or 0), str(record.get("via") or VIA_HTTP)
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return 0.0, 0, VIA_HTTP
@@ -166,22 +167,22 @@ def pause_source(root: Path, source: str, *, refused: bool = False,
     冷却细档（`SourceTransport.hold`）都从这里进，与 `SourceTransport` 读写同一份记录。
     `via` 是这次请求走的路；记录是另一条路写下的，就从第一档重新数。
     """
-    until, blocks = _state_for(root, source, via)
-    if refused:
-        blocks += 1
-        limit = SOURCES.get(source, {}).get("blocked_pause") or 24 * 3600
-        until = time.time() + min(FIRST_BLOCKED_PAUSE * 2 ** (blocks - 1), limit)
-    else:
-        until = time.time() + max(0.0, float(retry_after if retry_after is not None else 900))
-    _pause(cooldown_path(root, source), until, blocks, via)
+    with _LOCK:
+        until, blocks = _state_for(root, source, via)
+        if refused:
+            blocks += 1
+            limit = SOURCES.get(source, {}).get("blocked_pause") or 24 * 3600
+            until = time.time() + min(FIRST_BLOCKED_PAUSE * 2 ** (blocks - 1), limit)
+        else:
+            until = time.time() + max(0.0, float(retry_after if retry_after is not None else 900))
+        _pause(cooldown_path(root, source), until, blocks, via)
     return until
 
 
 def _pause(cooldown: Path, until: float, blocks: int = 0, via: str = VIA_HTTP) -> None:
     with _LOCK:
         cooldown.parent.mkdir(parents=True, exist_ok=True)
-        cooldown.write_text(json.dumps({"until": max(until, time.time() + 1), "blocks": blocks, "via": via}),
-                            encoding="utf-8")
+        atomic_write_text(cooldown, json.dumps({"until": max(until, time.time() + 1), "blocks": blocks, "via": via}))
 
 
 def source_for(url: str) -> str | None:
@@ -403,7 +404,7 @@ def client_for(root: Path, source: str, *, session: bool = False, **kwargs) -> h
 class SourceTransport:
     """公开采集按来源复用连接池；登录会话由特定来源消费者显式建立。"""
 
-    def __init__(self, secrets_root: Path, *, policy_root: Path | None = None, max_requests: int = 0,
+    def __init__(self, secrets_root: Path, *, policy_root: Path | None = None, budget=None, max_requests: int = 0,
                  max_bytes: int = 0, max_seconds: float = 0):
         self.root = secrets_root
         self.policy_root = policy_root
@@ -412,6 +413,29 @@ class SourceTransport:
         from .processing_control import deadline_after
         self.deadline = deadline_after(max_seconds) if max_seconds else 0
         self.requests = self.bytes = 0
+        self.budget = budget if budget is not None else self
+        self._budget_lock = threading.Lock()
+        self._reserved_bytes = 0
+
+    def _reserve_budget(self, timeout, limit):
+        budget = self.budget
+        with budget._budget_lock:
+            if budget.max_requests and budget.requests >= budget.max_requests:
+                raise SourceBudgetExhausted("本趟采集次数已用完，再跑一次接着采；已有图片保留")
+            if budget.deadline:
+                timeout = min(timeout, budget.deadline - time.monotonic())
+                if timeout <= 0:
+                    raise SourceBudgetExhausted("本趟采集时间已用完，再跑一次接着采；已有图片保留")
+            reserved = 0
+            if budget.max_bytes:
+                remaining = budget.max_bytes - budget.bytes - budget._reserved_bytes
+                if remaining <= 0:
+                    raise SourceBudgetExhausted("本趟下载量已用完，再跑一次接着采；已有图片保留")
+                limit = min(limit, remaining - 1)
+                reserved = limit + 1
+                budget._reserved_bytes += reserved
+            budget.requests += 1
+            return timeout, limit, reserved
 
     def __call__(self, request: HttpRequest, timeout: float, max_bytes: int):
         from .task_control import operation
@@ -456,17 +480,6 @@ class SourceTransport:
             headers = {key: value for key, value in request.headers.items() if key.lower() != "accept-language"}
             request = HttpRequest(request.method, request.url,
                                   {**headers, "Accept-Language": "zh-CN,zh;q=0.9"}, request.body)
-        if self.max_requests and self.requests >= self.max_requests:
-            raise SourceBudgetExhausted("本趟采集次数已用完，再跑一次接着采；已有图片保留")
-        if self.deadline:
-            timeout = min(timeout, self.deadline - time.monotonic())
-            if timeout <= 0:
-                raise SourceBudgetExhausted("本趟采集时间已用完，再跑一次接着采；已有图片保留")
-        if self.max_bytes:
-            remaining = self.max_bytes - self.bytes
-            if remaining <= 0:
-                raise SourceBudgetExhausted("本趟下载量已用完，再跑一次接着采；已有图片保留")
-            max_bytes = min(max_bytes, remaining - 1)
         key = source or hashlib.sha256(hostname_of(request.url).encode()).hexdigest()
         cooldown = cooldown_path(self.root, key)
         # 冷却只认这条路自己撞出来的账：直连 403 攒下的 `blocks` 与 `until` 不压到浏览器那条路上，反之亦然。
@@ -474,17 +487,23 @@ class SourceTransport:
         until, blocks = _state_for(self.root, key, via)
         if until > time.time():
             raise SourcePaused("来源正在冷却，请稍后重试；已有图片保留")
-        if source not in self.transports:
-            self.transports[source] = self._transport_for(source)
-        self.requests += 1
+        timeout, max_bytes, reserved = self._reserve_budget(timeout, max_bytes)
+        reservation = [reserved]
+        try:
+            if source not in self.transports:
+                self.transports[source] = self._transport_for(source)
+            return self._response(request, timeout, max_bytes, source, cooldown, via, blocks, reservation)
+        finally:
+            with self.budget._budget_lock:
+                self.budget._reserved_bytes -= reservation[0]
+
+    def _response(self, request, timeout, max_bytes, source, cooldown, via, blocks, reservation):
         try:
             response = self.transports[source](request, timeout, max_bytes)
         except (httpx.HTTPError, browser_transport.BrowserUnavailable):
             raise httpx.TransportError("来源连接未取得，请检查该来源的网络设置") from None
         except browser_transport.ChallengeUnsolved:
-            blocks += 1
-            _pause(cooldown, time.time() + min(FIRST_BLOCKED_PAUSE * 2 ** (blocks - 1),
-                                               SOURCES[source]["blocked_pause"]), blocks, via)
+            pause_source(self.root, source, refused=True, via=via)
             raise SourcePaused("来源的人机验证没有在限时内通过，暂停向它请求一段时间；"
                                "浏览器窗口再弹出时点一下验证即可；已有图片保留")
         if via == VIA_HTTP and source and SOURCES[source].get("browser_fallback") and _refused(response):
@@ -493,7 +512,10 @@ class SourceTransport:
                 # HTTP 客户端那条路攒下的账不压到浏览器上：清掉，之后按浏览器那条路重新数。
                 cooldown.unlink(missing_ok=True)
                 response, via, blocks = verified, VIA_BROWSER, 0
-        self.bytes += len(response.body)
+        with self.budget._budget_lock:
+            self.budget.bytes += len(response.body)
+            self.budget._reserved_bytes -= reservation[0]
+            reservation[0] = 0
         if response.status == 429:
             retry = response.headers.get("retry-after", "")
             try:
@@ -503,20 +525,23 @@ class SourceTransport:
                     until = parsedate_to_datetime(retry).timestamp()
                 except (ValueError, TypeError, OverflowError):
                     until = time.time() + 900
-            _pause(cooldown, until, blocks, via)
+            key = source or hashlib.sha256(hostname_of(request.url).encode()).hexdigest()
+            pause_source(self.root, key, retry_after=until - time.time(), via=via)
             raise SourcePaused("来源限流，已记录冷却时间；已有图片保留")
         blocked_pause = SOURCES.get(source or "", {}).get("blocked_pause")
         if response.status == 403 and blocked_pause:
-            blocks += 1
-            _pause(cooldown, time.time()
-                   + min(FIRST_BLOCKED_PAUSE * 2 ** (blocks - 1), blocked_pause), blocks, via)
+            pause_source(self.root, source, refused=True, via=via)
             if SOURCES[source].get("cookie"):
                 raise SourcePaused("来源拒绝访问，暂停向它请求一段时间；"
                                    "请在采集设置里更新它的 Cookie；已有图片保留")
             raise SourcePaused("来源拒绝访问，暂停向它请求一段时间；已有图片保留")
         if blocks and response.status < 400:
             # 这一趟通了，封已经解除：清掉记录，下次撞上从最短的一档重新起算。
-            cooldown.unlink(missing_ok=True)
+            with _LOCK:
+                key = source or hashlib.sha256(hostname_of(request.url).encode()).hexdigest()
+                until, _, recorded = _record(self.root, key)
+                if recorded == via and until <= time.time():
+                    cooldown.unlink(missing_ok=True)
         return response
 
     def hold(self, source: str, action: str) -> None:
