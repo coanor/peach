@@ -1,4 +1,4 @@
-"""作品并发的重叠、归属、共享预算与失败提交边界。"""
+"""资料采集并发的重叠、归属、共享预算与失败提交边界。"""
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from tempfile import TemporaryDirectory

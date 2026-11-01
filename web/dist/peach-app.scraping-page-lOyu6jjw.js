@@ -1,7 +1,7 @@
 (function() {
 	try {
 		var e = typeof globalThis < "u" ? globalThis : typeof window < "u" ? window : typeof global < "u" ? global : typeof self < "u" ? self : {}, t = new e.Error().stack;
-		t && (e._sentryDebugIds = e._sentryDebugIds || {}, e._sentryDebugIds[t] = "dc644a46-7aad-4d12-85a3-4f26ea6890bf", e._sentryDebugIdIdentifier = "sentry-dbid-dc644a46-7aad-4d12-85a3-4f26ea6890bf");
+		t && (e._sentryDebugIds = e._sentryDebugIds || {}, e._sentryDebugIds[t] = "cb9338ed-b247-4c1b-82c3-27fd3546e7e8", e._sentryDebugIdIdentifier = "sentry-dbid-cb9338ed-b247-4c1b-82c3-27fd3546e7e8");
 	} catch {}
 })();
 import { $fe21c36db05242bb$export$d7b12c4107be0d61 as e, AMANE_BRIDGE_CHECK_URL as t, AMANE_BRIDGE_KEY as n, AMANE_BRIDGE_REBUILD_URL as r, Button as i, COVER_JOB_KEY as a, CUSTOM_SOURCES_KEY as o, CUSTOM_SOURCES_URL as s, Checkbox as c, Disclosure as l, ErrorText as u, ExternalLink as d, Fact as f, FactList as p, FieldLabel as m, Footer as h, Help as g, Input as _, LinkButton as v, LoadingDots as y, Note as b, Rows as ee, SCRAPING_CHECK_URL as te, SCRAPING_COVER_URL as x, SCRAPING_KEY as S, SCRAPING_SETTINGS_URL as C, SEGMENT as ne, SEGMENTED_TRACK as re, Section as w, SegmentedRadioGroup as ie, Select$1 as T, SelectField as E, SelectItem as D, SettingsRow as ae, Stack as O, StatusLabel as k, __toESM as A, apiSend as j, busyProps as M, checkText as oe, confirmModal as N, errorMessage as P, esc as F, fetchAmaneBridge as I, fetchCoverJob as L, fetchCustomSources as R, fetchSources as z, i2 as se, queryClient as B, require_jsx_runtime as V, require_react as H, spinnerHtml as U, useAction as W, useBackgroundJob as G, useMutation as K, useQuery as q, wireDragReorder as ce } from "./peach-app.js";
@@ -310,7 +310,7 @@ function _e({ initial: e, toast: t }) {
 					className: "flex flex-col gap-3",
 					children: n.preferred_sources.map((e, t) => /* @__PURE__ */ (0, X.jsxs)("li", {
 						"data-source-order": e,
-						className: "flex cursor-grab flex-wrap items-center justify-between gap-2 [&.dragging]:opacity-50 [&.drop-before]:border-t-2 [&.drop-after]:border-b-2",
+						className: "flex cursor-grab flex-wrap items-center justify-between gap-2 [&.drop-before]:border-t-2 [&.drop-after]:border-b-2",
 						children: [/* @__PURE__ */ (0, X.jsxs)("span", {
 							className: "text-body-2-regular",
 							children: [
@@ -769,4 +769,4 @@ function Ce({ toast: e }) {
 }
 export { Ce as ScrapingPage, ve as linkHost, Q as networkOptions };
 
-//# debugId=dc644a46-7aad-4d12-85a3-4f26ea6890bf
+//# debugId=cb9338ed-b247-4c1b-82c3-27fd3546e7e8

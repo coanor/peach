@@ -61,7 +61,7 @@ export function SourcePolicy({ initial, toast }: {
       {policy.preferred_sources.length ? <ol key={policy.preferred_sources.join(',')} ref={dragList}
         aria-label="优先来源顺序" className="flex flex-col gap-3">
         {policy.preferred_sources.map((source, index) => <li key={source} data-source-order={source}
-          className="flex cursor-grab flex-wrap items-center justify-between gap-2 [&.dragging]:opacity-50 [&.drop-before]:border-t-2 [&.drop-after]:border-b-2">
+          className="flex cursor-grab flex-wrap items-center justify-between gap-2 [&.drop-before]:border-t-2 [&.drop-after]:border-b-2">
           <span className="text-body-2-regular">{index + 1}. {label(source)}</span>
           <div className="flex flex-wrap gap-2">
             <Select aria-label={`${label(source)} 优先顺序`} selectedKey={String(index)} size="sm"
