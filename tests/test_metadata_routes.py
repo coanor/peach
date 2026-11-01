@@ -30,7 +30,7 @@ class CollectionSourcePolicyTests(unittest.TestCase):
             self.assertEqual(order(route_for_code('FC2-PPV-1234567'), policy)[0], 'javdb')
             self.assertNotIn('javbus', order(route_for_code('FC2-PPV-1234567'), policy))
             self.assertEqual(order((), policy), ())
-            self.assertEqual(save(root, {}), {'preferred_sources': [], 'disabled_sources': []})
+            self.assertEqual(save(root, {}), {'preferred_sources': [], 'disabled_sources': [], 'concurrency': None})
 
     def test_invalid_preferences_preserve_the_saved_policy(self):
         """未知来源、停用优先来源和错误数据类型均不覆盖已保存设置。"""
@@ -40,7 +40,8 @@ class CollectionSourcePolicyTests(unittest.TestCase):
             previous = save(root, {'preferred_sources': ['javbus','javdb']})
             for policy in ({'preferred_sources': 'javbus'}, {'disabled_sources': ['unknown']},
                            {'preferred_sources': ['javdb'], 'disabled_sources': ['javdb']},
-                           {'preferred_sources': ['unknown']}):
+                           {'preferred_sources': ['unknown']},
+                           *({'concurrency': value} for value in (0, -1, True, 1.5, '4'))):
                 with self.subTest(policy=policy), self.assertRaises(ValueError):
                     save(root, policy)
                 self.assertEqual(read(root), previous)
@@ -60,6 +61,16 @@ class CollectionSourcePolicyTests(unittest.TestCase):
                     self.assertEqual(order(applicable, policy),
                                      tuple(source for source in preferred if source in applicable))
             self.assertEqual(order((), policy), ())
+
+    def test_worker_preference_is_persisted_and_automatic_can_be_restored(self):
+        """自定义并发数与来源偏好共同保存，自动值保留为空。"""
+        from peach.collection_source_policy import read, save
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            self.assertIsNone(read(root)['concurrency'])
+            save(root, {'preferred_sources': ['dmm'], 'concurrency': 7})
+            self.assertEqual(read(root)['concurrency'], 7)
+            self.assertIsNone(save(root, {'concurrency': None})['concurrency'])
 
 
 class ClassifyTests(unittest.TestCase):

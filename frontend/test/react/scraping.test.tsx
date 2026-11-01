@@ -12,7 +12,7 @@ import { prefetchScraping } from '../../src/react/scraping/scraping';
 import type { AmaneBridge, Check, CoverJob, Source } from '../../src/react/scraping/scraping';
 
 import {
-  buttonNamed, click, mount, mountRoot, section, settle, submit, type,
+  buttonNamed, choose, click, mount, mountRoot, section, settle, submit, type,
 } from './render';
 
 // 客户端是模块级的单例（所有 React 根共用一个），用例之间不清就互相喂数据。
@@ -124,7 +124,7 @@ it('首屏用 prefetch 缓存画出来源与任务，挂载时不重复请求', 
 });
 
 const collectionPolicy = {
-  preferred_sources: [], disabled_sources: [], sources: [
+  preferred_sources: [], disabled_sources: [], concurrency: null, default_concurrency: 6, sources: [
     { source: 'javbus', label: 'JavBus', can_prefer: true },
     { source: 'javdb', label: 'JavDB', can_prefer: true },
     { source: 'dmm', label: 'DMM', can_prefer: true },
@@ -132,7 +132,7 @@ const collectionPolicy = {
   ],
 };
 
-it('来源偏好保存只提交顺序与停用列表，保留凭证卡片', async () => {
+it('采集设置保存来源偏好与并发数，保留凭证卡片', async () => {
   const { calls, host, toast } = await open({
     ...quiet({ cookie_saved: true }),
     'GET /api/scraping': () => ({ body: { sources: [source({ cookie_saved: true })], collection_policy: collectionPolicy } }),
@@ -147,10 +147,10 @@ it('来源偏好保存只提交顺序与停用列表，保留凭证卡片', asyn
   await click(buttonNamed('保存采集来源', card));
   await settle();
   expect(calls.at(-1)?.body).toEqual({ collection_policy: {
-    preferred_sources: ['javbus', 'javdb'], disabled_sources: ['dmm'],
+    preferred_sources: ['javbus', 'javdb'], disabled_sources: ['dmm'], concurrency: null,
   } });
   expect(buttonNamed('撤销 Cookie', section(host, 'JavBus')!)).not.toBeNull();
-  expect(toast).toHaveBeenCalledWith('采集来源设置已保存，从下一部影片开始使用');
+  expect(toast).toHaveBeenCalledWith('采集设置已保存');
 });
 
 it('来源偏好允许四家优先来源并提交完整顺序', async () => {
@@ -170,7 +170,35 @@ it('来源偏好允许四家优先来源并提交完整顺序', async () => {
   await click(buttonNamed('保存采集来源', card));
   await settle();
   expect(calls.at(-1)?.body).toEqual({ collection_policy: {
-    preferred_sources: ['javbus', 'javdb', 'dmm', 'r18dev'], disabled_sources: [],
+    preferred_sources: ['javbus', 'javdb', 'dmm', 'r18dev'], disabled_sources: [], concurrency: null,
+  } });
+});
+
+it('并发数可从 CPU 自动值切换到自定义，并拒绝无效草稿', async () => {
+  const { calls, host } = await open({
+    ...quiet(),
+    'GET /api/scraping': () => ({ body: { sources: [source()], collection_policy: collectionPolicy } }),
+    'POST /api/scraping/settings': (body: { collection_policy: unknown }) => ({ body }),
+  });
+  const card = section(host, '馆藏采集来源')!;
+  const mode = () => card.querySelector('[aria-haspopup=listbox]');
+  expect(mode()?.textContent).toContain('CPU 逻辑核心数：6');
+  await choose(mode(), '自定义');
+  const count = card.querySelector<HTMLInputElement>('input[type=number]')!;
+  await type(count, '0');
+  expect(buttonNamed('保存采集来源', card)?.disabled).toBe(true);
+  await type(count, '9');
+  await click(buttonNamed('保存采集来源', card));
+  await settle();
+  expect(calls.at(-1)?.body).toEqual({ collection_policy: {
+    preferred_sources: [], disabled_sources: [], concurrency: 9,
+  } });
+  await choose(mode(), '自动（CPU 逻辑核心数：6）');
+  expect(card.querySelector('input[type=number]')).toBeNull();
+  await click(buttonNamed('保存采集来源', card));
+  await settle();
+  expect(calls.at(-1)?.body).toEqual({ collection_policy: {
+    preferred_sources: [], disabled_sources: [], concurrency: null,
   } });
 });
 

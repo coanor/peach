@@ -1,4 +1,4 @@
-"""本机馆藏采集的来源偏好；只调整已有来源链，不扩大内容类型范围。"""
+"""本机馆藏采集的来源顺序、启用状态与作品并发数。"""
 from __future__ import annotations
 
 import json
@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .fsutil import atomic_write_text
 from .metadata_routes import ROUTES
+from .collection_concurrency import worker_count
 
 AVAILABLE = tuple(dict.fromkeys(source for chain in ROUTES.values() for source in chain))
 
@@ -21,6 +22,9 @@ def validate(raw: dict) -> dict:
         result[field] = list(dict.fromkeys(values))
     if set(result['preferred_sources']) & set(result['disabled_sources']):
         raise ValueError('优先来源须保持启用')
+    concurrency = raw.get('concurrency')
+    worker_count(concurrency)
+    result['concurrency'] = concurrency
     return result
 
 

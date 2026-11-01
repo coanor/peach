@@ -4,6 +4,7 @@ import { useMutation } from '@tanstack/react-query';
 import { wireDragReorder } from '@peach/legacy/ui';
 import { Button } from '@/components/base/buttons/button';
 import { Checkbox } from '@/components/base/checkbox/checkbox';
+import { Input } from '@/components/base/input/input';
 import { Select, SelectItem } from '@/components/base/select/select';
 import { apiSend, errorMessage } from '../../api';
 import { Note } from '../components/note';
@@ -17,16 +18,21 @@ export function SourcePolicy({ initial, toast }: {
 }) {
   const [policy, setPolicy] = useState<CollectionSourcePolicy>({
     preferred_sources: initial.preferred_sources, disabled_sources: initial.disabled_sources,
+    concurrency: initial.concurrency ?? null,
   });
+  const [concurrency, setConcurrency] = useState(String(initial.concurrency ?? initial.default_concurrency));
+  const configured = policy.concurrency === null ? null : Number(concurrency);
+  const invalid = configured !== null && (!/^[1-9]\d*$/.test(concurrency) || !Number.isSafeInteger(configured));
   const save = useMutation({
     mutationFn: () => apiSend<{ collection_policy: CollectionSourcePolicy }>(SCRAPING_SETTINGS_URL,
-      { collection_policy: policy }),
+      { collection_policy: { ...policy, concurrency: configured } }),
     onSuccess: (result) => {
       setPolicy(result.collection_policy);
+      setConcurrency(String(result.collection_policy.concurrency ?? initial.default_concurrency));
       queryClient.setQueryData<ScrapingData>(SCRAPING_KEY, (current) => current && {
         ...current, collection_policy: { ...initial, ...result.collection_policy },
       });
-      toast('采集来源设置已保存，从下一部影片开始使用');
+      toast('采集设置已保存');
     },
   });
   const saving = useRef(false);
@@ -50,13 +56,26 @@ export function SourcePolicy({ initial, toast }: {
   return <Section title="馆藏采集来源">
     <Help>优先来源按顺序查询，资料不足或封面未取得时继续使用后备来源。停用只影响馆藏采集，登录凭证和已有资料保留。</Help>
     <Stack>
+      <div className="flex flex-wrap items-end gap-3">
+        <Select aria-label="采集并发数" selectedKey={policy.concurrency === null ? 'auto' : 'custom'}
+          isDisabled={save.isPending} onSelectionChange={(key) => setPolicy((current) => ({
+            ...current, concurrency: key === 'auto' ? null : initial.default_concurrency,
+          }))}>
+          <SelectItem id="auto">自动（CPU 逻辑核心数：{initial.default_concurrency}）</SelectItem>
+          <SelectItem id="custom">自定义</SelectItem>
+        </Select>
+        {policy.concurrency !== null ? <Input label="同时采集作品数" type="number" inputMode="numeric" className="w-40"
+          autoComplete="off" value={concurrency} onChange={setConcurrency} isDisabled={save.isPending}
+          isInvalid={invalid} hint={invalid ? '请输入大于 0 的整数。' : undefined} /> : null}
+      </div>
+      <Help>并发数在下次启动采集任务时生效；来源顺序和启用状态从下一部影片开始使用。处理强度控制节奏，来源限流和任务总预算仍然有效。</Help>
       <div className="flex flex-wrap gap-2">
         <Button variant="secondary" size="small" disabled={save.isPending} onClick={() => setPolicy((current) => ({
           ...current, preferred_sources: ['javbus', 'javdb'],
           disabled_sources: current.disabled_sources.filter((source) => !['javbus', 'javdb'].includes(source)),
         }))}>优先 JavBus 和 JavDB</Button>
         <Button variant="secondary" size="small" disabled={save.isPending}
-          onClick={() => setPolicy({ preferred_sources: [], disabled_sources: [] })}>恢复内置顺序</Button>
+          onClick={() => setPolicy((current) => ({ ...current, preferred_sources: [], disabled_sources: [] }))}>恢复内置顺序</Button>
       </div>
       {policy.preferred_sources.length ? <ol key={policy.preferred_sources.join(',')} ref={dragList}
         aria-label="优先来源顺序" className="flex flex-col gap-3">
@@ -91,6 +110,7 @@ export function SourcePolicy({ initial, toast }: {
       <Help>查询仍按作品类型选择适用来源。来源偏好不改变资料复核和封面身份、尺寸检查。</Help>
       {save.error ? <Note tone="error">{errorMessage(save.error)}</Note> : null}
     </Stack>
-    <Footer><Button {...busyProps(save.isPending)} onClick={() => save.mutate()}>保存采集来源</Button></Footer>
+    <Footer><Button {...busyProps(save.isPending)} disabled={invalid || save.isPending}
+      onClick={() => save.mutate()}>保存采集来源</Button></Footer>
   </Section>;
 }

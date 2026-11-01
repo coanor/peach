@@ -407,7 +407,7 @@ Folia（`chthollyphile/folia-major`，AGPL-3.0，revision `9a01e788ed52d25ea01b1
 
 馆藏采集来源设置复用 `metadata_routes` 的内容分类与原有来源链、`SourceTransport` 的请求边界、`verified_cover` 的图片检查及 `fsutil.atomic_write_text`。`collection_source_policy` 只保存本机优先和停用来源，当前馆藏来源链中的所有成员均可设为优先，不复制解析器、凭证或落库判据；页面复用 BoardUI Checkbox、Select、Button 与现有拖动排序，无新增依赖。未指定偏好时沿用原有查询行为。
 
-作品并发复用标准库 `ThreadPoolExecutor`、`Future`、`Queue` 和 `ContextVar`，由 `collection_concurrency` 将候选、日志与检查点回执交回任务线程。`library_collection` 按番号分组并沿用处理强度；来源连接独立，`HostLimiter`、冷却和 `SourceTransport` 预算共用。流量样本与跳过意图按当前作品隔离，无新增依赖。
+作品并发复用标准库 `ThreadPoolExecutor`、`Future`、`Queue` 和 `ContextVar`，由 `collection_concurrency` 将候选、日志与检查点回执交回任务线程。默认槽位数复用 `os.process_cpu_count()`，自定义值随来源偏好保存并在启动采集时读取；`library_collection` 按番号分组，处理强度继续控制 I/O 节奏。来源连接独立，`HostLimiter`、冷却和 `SourceTransport` 预算共用。流量样本与跳过意图按当前作品隔离，无新增依赖。
 
 ## 脚本目录与参数
 

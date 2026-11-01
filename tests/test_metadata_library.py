@@ -597,7 +597,8 @@ class LibraryNfoTests(unittest.TestCase):
 
     @windows_ledger_roots
     def test_distinct_titles_query_concurrently_and_commit_their_own_fields(self):
-        """标准模式同时采集两部，候选和自动采纳仍归各自影片。"""
+        """配置两部并发后，候选和自动采纳仍归各自影片。"""
+        from peach.collection_source_policy import save
         media = self.root / 'media'
         media.mkdir()
         for code in ('ABW-358', 'ABW-359'):
@@ -605,6 +606,7 @@ class LibraryNfoTests(unittest.TestCase):
         db = fresh_ledger(self.root)
         config = PeachConfig(self.root, self.root / 'config.toml', present=True,
                              locations={'local': (str(media),)})
+        save(config.directory('state'), {'concurrency': 2})
         barrier = threading.Barrier(2)
         def factory():
             provider = stub_provider()
@@ -622,6 +624,7 @@ class LibraryNfoTests(unittest.TestCase):
             titles = dict(connection.execute('SELECT code, catalog_title FROM asset'))
         self.assertEqual(titles, {code: f'标题 {code}' for code in ('ABW-358', 'ABW-359')})
         self.assertEqual(result['checked'], 2)
+        self.assertEqual(result['collection_concurrency'], 2)
 
     @windows_ledger_roots
     def test_confirmed_online_fields_are_committed_while_cover_fetch_is_pending(self):

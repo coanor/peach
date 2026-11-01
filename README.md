@@ -42,7 +42,7 @@ Movie demo data; see [asset credits and licenses](https://peach.video/en/credits
 
 ## Features
 
-- **Metadata scraping**: recognize video codes, read NFO files and fill titles, performers, studios and covers from multiple sources while keeping your edits. Choose enabled sources and prioritize community sources such as JavBus and JavDB on the Sources and Credentials page. Low, standard and full speed process up to 1, 2 and 4 titles concurrently while sharing source limits and the task budget.
+- **Metadata scraping**: recognize video codes, read NFO files and fill titles, performers, studios and covers from multiple sources while keeping your edits. Choose enabled sources, priority order and collection concurrency on the Sources and Credentials page. Concurrency defaults to the available CPU logical core count and accepts a custom positive integer, while source limits and the task budget remain shared.
 - **Local and cloud libraries**: browse local drives, SMB, mounted cloud storage and PikPak libraries together.
 - **Playback and history**: web and external players, subtitles, playback speed, rotation, resume and timeline previews.
 - **Follows and discovery**: track performer and creator updates, discover titles and manage a want list.

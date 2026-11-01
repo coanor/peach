@@ -7,7 +7,7 @@ from .collection_concurrency import CollectionPool, on_owner
 
 def collect(prepared, remote, traffic, cover_root, covered, *, state, completed_count,
             stages_of, guard, update, issue, publish, groups, poster_failed,
-            checkpoints, flush_candidates, scoped_groups):
+            checkpoints, flush_candidates, scoped_groups, concurrency=None):
     from .library_processing import (_answered_sources, _collect_allowed, _missing_fields,
                                     COLLECTED_FIELDS)
     pool = CollectionPool()
@@ -97,7 +97,7 @@ def collect(prepared, remote, traffic, cover_root, covered, *, state, completed_
             work_item(entry)
 
     try:
-        pool.run(batches.values(), work, lambda: {'low': 1, 'standard': 2, 'high': 4}[state['speed_mode']])
+        pool.run(batches.values(), work, workers=concurrency)
     finally:
         for session in sessions:
             session.close()

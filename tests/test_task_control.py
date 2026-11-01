@@ -297,7 +297,7 @@ class TaskControlTests(unittest.TestCase):
                     on_owner(task_control.checkpoint)
                 completed.append(index)
             def work(job, identity):
-                CollectionPool().run([0, 1], operation, lambda: 2)
+                CollectionPool().run([0, 1], operation, workers=2)
                 job.update(identity, status='complete')
             job, original = self.start(work)
             self.assertTrue(all(event.wait(5) for event in entered))

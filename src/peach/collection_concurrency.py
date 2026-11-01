@@ -2,9 +2,19 @@
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextvars import ContextVar, copy_context
 from queue import Empty, Queue
+import os
 import threading
 
 _DISPATCH = ContextVar('collection_owner_dispatch', default=None)
+
+
+def worker_count(configured=None):
+    """未指定时使用当前进程可用的 CPU 逻辑核心数。"""
+    if configured is not None:
+        if type(configured) is not int or configured < 1:
+            raise ValueError('采集并发数须为大于 0 的整数，或选择自动')
+        return configured
+    return max(1, os.process_cpu_count() or os.cpu_count() or 1)
 
 
 def on_owner(function, *args, **kwargs):
@@ -58,12 +68,13 @@ class CollectionPool:
                 if not reply.done():
                     reply.set_exception(error)
 
-    def run(self, jobs, work, workers):
-        """最多四个在途作品组，强度下降后等现有步骤完成再领取下一组。"""
+    def run(self, jobs, work, workers=None):
+        """按本次任务的并发数领取作品组，空闲后补位。"""
+        limit = worker_count(workers)
         jobs = iter(jobs)
         futures = set()
         exhausted = False
-        executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix='PeachMetadata')
+        executor = ThreadPoolExecutor(max_workers=limit, thread_name_prefix='PeachMetadata')
         def execute(job):
             token = _DISPATCH.set(self.call)
             try:
@@ -72,7 +83,7 @@ class CollectionPool:
                 _DISPATCH.reset(token)
         try:
             while futures or not exhausted:
-                while not exhausted and len(futures) < max(1, min(4, workers())):
+                while not exhausted and len(futures) < limit:
                     try:
                         job = next(jobs)
                     except StopIteration:

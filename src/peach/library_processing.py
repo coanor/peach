@@ -3045,10 +3045,15 @@ def process_library(config, db_path, candidate_root, cover_root, *, location='co
                 prepared = [entry for entry in prepared if entry[0]['id'] not in blocked]
                 update(current_action='', current_started_at=None, current_deadline_at=None)
             from .library_collection import collect
+            from .collection_source_policy import read as read_collection_policy
+            from .collection_concurrency import worker_count
+            concurrency = worker_count(read_collection_policy(config.directory('state'))['concurrency'])
+            update(collection_concurrency=concurrency)
             collect(prepared, remote, traffic, cover_root, covered, state=state,
                 completed_count=completed_count, stages_of=stages_of, guard=guard,
                 update=update, issue=issue, publish=publish, groups=groups, poster_failed=poster_failed,
-                checkpoints=checkpoints, flush_candidates=flush_candidates, scoped_groups=scoped_groups)
+                checkpoints=checkpoints, flush_candidates=flush_candidates, scoped_groups=scoped_groups,
+                concurrency=concurrency)
             flush_candidates(force=True)
             update(estimate_pending={}, stage='整理采集结果', checked=0, total=0)
             # 候选完整落盘后立即执行调用方注入的窄规则，不再等人打开复核页才触发。

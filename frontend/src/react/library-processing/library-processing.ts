@@ -47,6 +47,7 @@ export interface LibraryProcessingData {
   archived?: boolean;
   new_asset_count?: number;
   speed_mode?: ProcessingSpeed;
+  collection_concurrency?: number;
   eta_seconds_min?: number | null;
   eta_seconds_max?: number | null;
   eta_kind?: 'historical' | 'measured' | 'estimating';

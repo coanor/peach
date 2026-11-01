@@ -6,7 +6,7 @@ import threading
 import unittest
 from unittest.mock import Mock, patch
 
-from peach.collection_concurrency import CollectionPool, on_owner
+from peach.collection_concurrency import CollectionPool, on_owner, worker_count
 from peach.http import HttpRequest, HttpResponse
 from peach.processing_control import CURRENT, ItemSkipped, ProcessingControl, processing_item
 from peach.scraping_access import SourceBudgetExhausted, SourceTransport
@@ -22,28 +22,47 @@ class CollectionConcurrencyTests(unittest.TestCase):
             self.assertNotEqual(threading.get_ident(), owner)
             barrier.wait(timeout=5)
             on_owner(lambda: published.append((value, threading.get_ident())))
-        CollectionPool().run([1, 2], work, lambda: 2)
+        CollectionPool().run([1, 2], work, workers=2)
         self.assertEqual({value for value, _ in published}, {1, 2})
         self.assertEqual({thread for _, thread in published}, {owner})
 
-    def test_low_mode_runs_one_asset_at_a_time(self):
-        """低占用只有一个在途作品，完成回执保留提交顺序。"""
+    def test_one_worker_runs_one_asset_at_a_time(self):
+        """并发数为一时，完成回执保留提交顺序。"""
         events = []
         def work(value):
             on_owner(events.append, ('start', value))
             on_owner(events.append, ('end', value))
-        CollectionPool().run(range(3), work, lambda: 1)
+        CollectionPool().run(range(3), work, workers=1)
         self.assertEqual(events, [(kind, value) for value in range(3) for kind in ('start', 'end')])
 
-    def test_four_assets_can_be_inflight_in_full_speed_mode(self):
-        """全速的四个作品槽位能同时工作。"""
-        barrier = threading.Barrier(4)
+    def test_cpu_default_runs_more_than_four_assets_concurrently(self):
+        """CPU 自动值可同时处理六部作品。"""
+        barrier = threading.Barrier(6)
         threads = set()
         def work(value):
             on_owner(threads.add, threading.get_ident())
             barrier.wait(timeout=5)
-        CollectionPool().run(range(4), work, lambda: 4)
-        self.assertEqual(len(threads), 4)
+        with patch('peach.collection_concurrency.os.process_cpu_count', return_value=6):
+            CollectionPool().run(range(6), work)
+        self.assertEqual(len(threads), 6)
+
+    def test_custom_worker_count_can_exceed_the_cpu_default(self):
+        """自定义并发数独立于 CPU 自动值。"""
+        barrier = threading.Barrier(5)
+        with patch('peach.collection_concurrency.os.process_cpu_count', return_value=2):
+            CollectionPool().run(range(5), lambda value: barrier.wait(timeout=5), workers=5)
+
+    def test_cpu_detection_falls_back_and_invalid_counts_are_rejected(self):
+        """CPU 数未知时至少保留一个槽位，并发数只接受正整数。"""
+        with patch('peach.collection_concurrency.os.process_cpu_count', return_value=None), \
+                patch('peach.collection_concurrency.os.cpu_count', return_value=3):
+            self.assertEqual(worker_count(), 3)
+        with patch('peach.collection_concurrency.os.process_cpu_count', return_value=None), \
+                patch('peach.collection_concurrency.os.cpu_count', return_value=None):
+            self.assertEqual(worker_count(), 1)
+        for value in (0, -1, True, 1.5, '4'):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                worker_count(value)
 
     def test_a_failed_commit_releases_other_waiting_workers(self):
         """公共提交失败中断整趟任务，不留下等待回执的工作线程。"""
@@ -54,7 +73,7 @@ class CollectionConcurrencyTests(unittest.TestCase):
             barrier.wait(timeout=5)
             on_owner(commit if value == 1 else lambda: None)
         with self.assertRaisesRegex(OSError, '候选无法保存'):
-            CollectionPool().run([1, 2], work, lambda: 2)
+            CollectionPool().run([1, 2], work, workers=2)
 
     def test_skip_intent_belongs_to_one_concurrent_asset(self):
         """跳过一部作品不打断同时运行的另一部。"""
@@ -83,7 +102,7 @@ class CollectionConcurrencyTests(unittest.TestCase):
                 except ItemSkipped:
                     pass
             try:
-                CollectionPool().run([1, 2], work, lambda: 2)
+                CollectionPool().run([1, 2], work, workers=2)
             finally:
                 CURRENT.reset(token)
             self.assertCountEqual(results, [('skipped', 1), ('ok', 2)])
@@ -197,7 +216,7 @@ class CollectionConcurrencyTests(unittest.TestCase):
         collect([(row, row['code'], False, {}, [], True) for row in rows], Remote(), Mock(), Path('.'), [],
             state=state, completed_count=0, stages_of=lambda _: {'metadata'}, guard=Mock(), update=update,
             issue=issue, publish=publish, groups={}, poster_failed=set(), checkpoints=checkpoints,
-            flush_candidates=lambda: None, scoped_groups=lambda: {})
+            flush_candidates=lambda: None, scoped_groups=lambda: {}, concurrency=2)
         self.assertCountEqual(published, [1, 2, 3])
         self.assertEqual(dict(calls)[1], dict(calls)[2])
         self.assertCountEqual(completions, [(1, True), (2, True), (3, False)])
