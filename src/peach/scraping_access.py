@@ -403,9 +403,10 @@ def client_for(root: Path, source: str, *, session: bool = False, **kwargs) -> h
 class SourceTransport:
     """公开采集按来源复用连接池；登录会话由特定来源消费者显式建立。"""
 
-    def __init__(self, secrets_root: Path, *, max_requests: int = 0,
+    def __init__(self, secrets_root: Path, *, policy_root: Path | None = None, max_requests: int = 0,
                  max_bytes: int = 0, max_seconds: float = 0):
         self.root = secrets_root
+        self.policy_root = policy_root
         self.transports: dict[str | None, HttpxTransport] = {}
         self.max_requests, self.max_bytes = max_requests, max_bytes
         from .processing_control import deadline_after
@@ -446,6 +447,10 @@ class SourceTransport:
         """闸门到顶的三句话都写「本趟」和「再跑一次接着采」：这三条按任务重新计数，
         读的人要据以决定的是「现在重跑一遍」，不是去查哪里还有配额。"""
         source = source_for(request.url)
+        if self.policy_root is not None:
+            from .collection_source_policy import read
+            if source in read(self.policy_root)['disabled_sources']:
+                raise SourcePaused('来源已停用，可在来源和凭证中重新启用；已有图片保留')
         if source == "javbus":
             # 中文作品解析与连接检查共用语言偏好，封面请求也遵循来源策略。
             headers = {key: value for key, value in request.headers.items() if key.lower() != "accept-language"}

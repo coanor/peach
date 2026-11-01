@@ -29,10 +29,35 @@ class ScrapingAccessTests(unittest.TestCase):
         finder.start()
         self.addCleanup(finder.stop)
 
+    def test_disabled_collection_sources_do_not_create_a_network_client(self):
+        """停用只阻止馆藏请求，凭证与其他来源保留。"""
+        from peach.collection_source_policy import save as save_policy
+        from peach.scraping_access import SourcePaused
+        state = self.root / 'state'
+        save_policy(state, {'disabled_sources': ['avbase']})
+        transport = SourceTransport(self.root, policy_root=state)
+        self.addCleanup(transport.close)
+        with patch.object(transport, '_transport_for') as create:
+            with self.assertRaisesRegex(SourcePaused, '已停用'):
+                transport(HttpRequest('GET', 'https://www.avbase.net/works/ABP-123', {}), 1, 1000)
+        create.assert_not_called()
+
+    def test_collection_policy_api_preserves_credentials(self):
+        """保存来源偏好只写状态目录，不改连接设置或 Cookie。"""
+        from peach.web_scraping import w_scraping_settings
+        save(self.root, 'javdb', {'cookie': 'session=preserved'})
+        before = values_for(self.root, 'javdb')
+        contract = SimpleNamespace(follow_secrets_root=self.root, db_path=self.root / 'database/ledger.db')
+        policy = {'preferred_sources': ['javbus','javdb'], 'disabled_sources': ['dmm']}
+        self.assertEqual(w_scraping_settings(contract, {'collection_policy': policy})['collection_policy'], policy)
+        self.assertEqual(values_for(self.root, 'javdb'), before)
+        self.assertEqual(q_scraping(contract, {})['collection_policy']['preferred_sources'], ['javbus','javdb'])
+
     def test_independent_installations_never_share_session_or_proxy(self):
         peach_proxy.save(self.root, {"mode": "proxy", "proxy": "http://user:private-proxy@127.0.0.1:7890"})
         save(self.root, "javdb", {"cookie": "session=private-cookie", "network": "peach"})
-        public = q_scraping(SimpleNamespace(follow_secrets_root=self.root), {})
+        public = q_scraping(SimpleNamespace(follow_secrets_root=self.root,
+                                           db_path=self.root / 'database/ledger.db'), {})
         self.assertEqual(next(item['label'] for item in public['sources'] if item['source'] == 'javdb'), 'JavDB')
         self.assertNotIn("private-cookie", json.dumps(public))
         self.assertNotIn("private-proxy", json.dumps(public))

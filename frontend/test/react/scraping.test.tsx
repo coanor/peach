@@ -123,6 +123,50 @@ it('首屏用 prefetch 缓存画出来源与任务，挂载时不重复请求', 
   expect(host.querySelector<HTMLAnchorElement>('a[href="https://www.javbus.com/"]')?.target).toBe('_blank');
 });
 
+const collectionPolicy = {
+  preferred_sources: [], disabled_sources: [], sources: [
+    { source: 'javbus', label: 'JavBus', can_prefer: true },
+    { source: 'javdb', label: 'JavDB', can_prefer: true },
+    { source: 'dmm', label: 'DMM', can_prefer: false },
+  ],
+};
+
+it('来源偏好保存只提交顺序与停用列表，保留凭证卡片', async () => {
+  const { calls, host, toast } = await open({
+    ...quiet({ cookie_saved: true }),
+    'GET /api/scraping': () => ({ body: { sources: [source({ cookie_saved: true })], collection_policy: collectionPolicy } }),
+    'POST /api/scraping/settings': (body: { collection_policy: unknown }) => ({ body }),
+  });
+  const card = section(host, '馆藏采集来源')!;
+  await click(buttonNamed('优先 JavBus 和 JavDB', card));
+  expect([...card.querySelectorAll('[data-source-order]')].map((row) => row.getAttribute('data-source-order')))
+    .toEqual(['javbus', 'javdb']);
+  const dmm = card.querySelector<HTMLInputElement>('input[type=checkbox]')!;
+  await click(dmm);
+  await click(buttonNamed('保存采集来源', card));
+  await settle();
+  expect(calls.at(-1)?.body).toEqual({ collection_policy: {
+    preferred_sources: ['javbus', 'javdb'], disabled_sources: ['dmm'],
+  } });
+  expect(buttonNamed('撤销 Cookie', section(host, 'JavBus')!)).not.toBeNull();
+  expect(toast).toHaveBeenCalledWith('采集来源设置已保存，从下一部影片开始使用');
+});
+
+it('来源偏好保存失败时保留草稿并显示原因', async () => {
+  const { host, toast } = await open({
+    ...quiet(),
+    'GET /api/scraping': () => ({ body: { sources: [source()], collection_policy: collectionPolicy } }),
+    'POST /api/scraping/settings': () => ({ ok: false, status: 400, body: { message: '设置未能写入' } }),
+  });
+  const card = section(host, '馆藏采集来源')!;
+  await click(buttonNamed('优先 JavBus 和 JavDB', card));
+  await click(buttonNamed('保存采集来源', card));
+  await settle();
+  expect(card.querySelector('[role=alert]')?.textContent).toContain('设置未能写入');
+  expect(card.querySelectorAll('[data-source-order]')).toHaveLength(2);
+  expect(toast).not.toHaveBeenCalled();
+});
+
 it('走本机浏览器的来源只说明验证怎么过，不画 Cookie 输入', async () => {
   const { host } = await open(quiet({ source: 'fc2ppvdb', label: 'FC2PPV-DB', browser: true }));
   const card = section(host, 'FC2PPV-DB');

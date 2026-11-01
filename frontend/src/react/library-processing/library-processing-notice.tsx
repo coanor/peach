@@ -14,6 +14,7 @@ import { useLibraryProcessingJob } from './use-library-processing';
 import { ProcessingLine } from './processing-line';
 import { CollapseChevron, CollapseRegion } from '../components/collapse-region';
 import { TrafficProgress } from './processing-traffic';
+import { CollectionActivity } from './collection-activity';
 
 const COLLAPSE_KEY = 'peach.library-processing.collapsed';
 function expandedFor(jobId?: string): boolean {
@@ -109,6 +110,7 @@ export function ProcessingNoticePanel({ state, problem = '', measure = false, on
       {partial ? <p className="text-body-2-regular wrap-anywhere">{PARTIAL_RESULT_TEXT}</p> : null}
       {active && state?.stage && !state.steps?.length ? <p className="text-caption-1-regular text-text-tertiary">当前阶段 · {state.stage}</p> : null}
       {state?.stalled && !problem && !slow ? <p className="text-caption-1-regular">当前步骤耗时较长，正在等待进展</p> : null}
+      {state ? <CollectionActivity state={state} compact /> : null}
     </div></div></CollapseRegion>
     <div className="flex flex-wrap items-center justify-between gap-2 pt-3">
       <LinkButton href="/data-cleanup#libraryProcessing" variant="secondary" size="small" trailingIcon={RiArrowRightLine}>

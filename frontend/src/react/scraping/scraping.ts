@@ -37,6 +37,12 @@ export interface Source {
 
 export interface ScrapingData {
   sources: Source[];
+  collection_policy?: CollectionSourcePolicy & { sources: { source: string; label: string; can_prefer: boolean }[] };
+}
+
+export interface CollectionSourcePolicy {
+  preferred_sources: string[];
+  disabled_sources: string[];
 }
 
 /** 一次连接检查的一项结果：来源页面，以及部分来源另有的高清图片地址。 */

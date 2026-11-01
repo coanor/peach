@@ -23,6 +23,7 @@ PUBLIC_FIELDS = frozenset({
     'issues_log', 'issues_truncated', 'retryable_asset_ids', 'notes', 'current_asset_id',
     'current_asset_name', 'current_action', 'current_started_at', 'last_progress_at', 'stalled',
     'waited_seconds', 'completed_at', 'current_source', 'skip_requested', 'archived', 'new_asset_count',
+    'collection_log', 'collection_preview',
 })
 
 

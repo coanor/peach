@@ -1,7 +1,10 @@
 import os
+from contextlib import contextmanager
+import ctypes
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from peach.fsutil import atomic_path, atomic_write_bytes, atomic_write_text
 
@@ -67,6 +70,60 @@ class AtomicWriteTests(unittest.TestCase):
         self.assertEqual(target.read_bytes(), b"payload")
         if os.name != "nt":
             self.assertEqual(target.stat().st_mode & 0o777, 0o600)
+
+
+@unittest.skipUnless(os.name == 'nt', '需要 Windows 原生文件句柄')
+class WindowsAtomicReplacementTests(AtomicWriteTests):
+    @contextmanager
+    def reader(self, path, *, sharing=7):
+        from ctypes import wintypes
+        kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                      ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+        kernel.CreateFileW.restype = wintypes.HANDLE
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        handle = kernel.CreateFileW(str(path), 0x80000000, sharing, None, 3, 0x80, None)
+        self.assertNotEqual(handle, ctypes.c_void_p(-1).value)
+        try:
+            yield kernel, handle
+        finally:
+            kernel.CloseHandle(handle)
+
+    def test_open_reader_keeps_old_json_while_new_readers_get_complete_replacement(self):
+        target = self.root / '采集进度-🍑.json'
+        atomic_write_bytes(target, b'{"version":1}')
+        with self.reader(target) as (kernel, handle), patch('peach.fsutil.READER_WAIT', 0):
+            atomic_write_bytes(target, b'{"version":2}')
+            self.assertEqual(target.read_bytes(), b'{"version":2}')
+            from ctypes import wintypes
+            kernel.ReadFile.argtypes = [wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD,
+                                       ctypes.POINTER(wintypes.DWORD), ctypes.c_void_p]
+            received = wintypes.DWORD()
+            buffer = ctypes.create_string_buffer(64)
+            self.assertTrue(kernel.ReadFile(handle, buffer, 64, ctypes.byref(received), None))
+            self.assertEqual(buffer.raw[:received.value], b'{"version":1}')
+        self.assertEqual(self.leftovers(), [])
+
+    def test_reader_denying_delete_preserves_old_json_on_failure(self):
+        target = self.root / 'progress.json'
+        atomic_write_bytes(target, b'{"version":1}')
+        with self.reader(target, sharing=3), patch('peach.fsutil.READER_WAIT', 0):
+            with self.assertRaises(PermissionError):
+                atomic_write_bytes(target, b'{"version":2}')
+            self.assertEqual(target.read_bytes(), b'{"version":1}')
+        self.assertEqual(self.leftovers(), [])
+
+    def test_readonly_target_preserves_original_json_on_failure(self):
+        target = self.root / 'progress.json'
+        atomic_write_bytes(target, b'{"version":1}')
+        target.chmod(0o444)
+        try:
+            with patch('peach.fsutil.READER_WAIT', 0), self.assertRaises(PermissionError):
+                atomic_write_bytes(target, b'{"version":2}')
+            self.assertEqual(target.read_bytes(), b'{"version":1}')
+            self.assertEqual(self.leftovers(), [])
+        finally:
+            target.chmod(0o666)
 
 
 if __name__ == "__main__":

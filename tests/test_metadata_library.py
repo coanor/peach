@@ -89,6 +89,100 @@ def _archive_pages(url):
 
 
 class LibraryNfoTests(unittest.TestCase):
+    def test_source_log_keeps_failures_before_a_later_source_succeeds(self):
+        from peach import collection_log
+        from peach.jav_cover_fetch import Unavailable
+        from peach.library_processing import _MissCache, _RemoteSession
+        events = []
+        provider = stub_provider()
+        provider.query.side_effect = [Unavailable('HTTP 503 token=hidden-secret'), {'title': '作品标题'}]
+        config = PeachConfig(self.root, self.root / 'config.toml', present=True)
+        remote = _RemoteSession(config, lambda: provider, _MissCache(self.root / 'misses.json'), retrying=False)
+        row = {'id': 1, 'name': 'ABC-123.mp4', 'path': 'R:/Films/ABC-123.mp4'}
+        with collection_log.bind(events.append), patch.object(remote, '_chain', return_value=('r18dev', 'dmm')):
+            found = remote._metadata(row, 'ABC-123', ['title'], update=lambda **values: None,
+                                     issue=lambda *args, **kwargs: self.fail('后续来源已取得资料'))
+        self.assertEqual([source for source, *_ in found], ['dmm'])
+        self.assertEqual([(event['source'], event['status']) for event in events],
+                         [('r18dev', 'running'), ('r18dev', 'failed'), ('dmm', 'running'), ('dmm', 'success')])
+        self.assertNotIn('hidden-secret', json.dumps(events))
+        self.assertEqual(events[1]['reason'], 'HTTP 503 token=<redacted>')
+        self.assertGreaterEqual(events[1]['elapsed_seconds'], 0)
+
+    def test_source_log_separates_missing_cancelled_and_kept_cover(self):
+        from peach import collection_log
+        from peach.library_processing import CoverKept, _MissCache, _RemoteSession
+        events = []
+        for failure, expected in [(NotFound('HTTP 404'), 'not_found'), (InterruptedError('已停止'), 'cancelled')]:
+            with self.assertRaises(type(failure)), collection_log.bind(events.append):
+                with collection_log.attempt('javdb', 'JavDB', 'querying_metadata'):
+                    raise failure
+            self.assertEqual(events[-1]['status'], expected)
+        provider = stub_provider()
+        provider.cover.side_effect = CoverKept('已有封面质量更高')
+        config = PeachConfig(self.root, self.root / 'config.toml', present=True)
+        remote = _RemoteSession(config, lambda: provider, _MissCache(self.root / 'misses.json'), retrying=False)
+        row = {'id': 1, 'name': 'ABC-123.mp4', 'path': 'R:/Films/ABC-123.mp4'}
+        with collection_log.bind(events.append):
+            self.assertEqual(remote._cover(row, 'ABC-123', self.root / 'covers',
+                             update=lambda **values: None, issue=lambda *args, **kwargs: self.fail('保留封面不算失败')), 0)
+        self.assertEqual(events[-1]['status'], 'kept')
+
+    def test_cover_request_log_reports_the_actual_host_and_http_result(self):
+        from peach import collection_log
+        from peach.http import HttpRequest
+        events = []
+        response = HttpResponse(404, b'', {}, 'https://images.example/a.jpg')
+        inner = Mock(return_value=response)
+        transport = collection_log.CollectionTransport(inner, 0)
+        request = HttpRequest('GET', 'https://images.example/a.jpg?token=hidden-secret', {})
+        with collection_log.bind(events.append):
+            self.assertIs(transport(request, 5, 100), response)
+        self.assertEqual([(event['source'], event['status']) for event in events],
+                         [('images.example', 'running'), ('images.example', 'not_found')])
+        self.assertEqual(events[-1]['http_status'], 404)
+        self.assertNotIn('hidden-secret', json.dumps(events))
+
+    @windows_ledger_roots
+    def test_collection_publishes_recent_source_events_and_preserves_a_full_log(self):
+        from peach.web_library_processing import public_state
+        media = self.root / 'media'
+        media.mkdir()
+        video = media / 'ABC-123.mp4'
+        video.write_bytes(b'video')
+        db = fresh_ledger(self.root)
+        config = PeachConfig(self.root, self.root / 'config.toml', present=True,
+                             locations={'local': (str(media),)})
+        with closing(sqlite3.connect(db)) as connection, connection:
+            connection.execute('INSERT INTO asset(id,location,path,name,medium,code) VALUES(1,?,?,?,?,?)',
+                               ('local', str(video), video.name, 'video', 'ABC-123'))
+        provider = stub_provider()
+        provider.query.return_value = {'id': 'ABC-123', 'title': '作品标题'}
+        provider.cover.return_value = False
+        snapshots = []
+        state = process_library(config, db, self.root / 'candidates', self.root / 'covers',
+                                asset_ids=[1], stage='metadata', provider_factory=lambda: provider,
+                                report=snapshots.append)
+        events = [json.loads(line) for line in Path(state['collection_log']).read_text(encoding='utf-8').splitlines()]
+        self.assertTrue(any(event['source'] == 'r18dev' and event['status'] == 'success' for event in events))
+        self.assertTrue(all(event['asset_id'] == 1 and event['code'] == 'ABC-123' for event in events))
+        self.assertEqual(public_state(state)['collection_preview'], events[-20:])
+        self.assertTrue(any(snapshot.get('current_source', {}).get('key') == 'r18dev'
+                            for snapshot in snapshots if snapshot.get('current_source')))
+
+    def test_collection_log_resume_appends_with_a_bounded_preview(self):
+        from peach.collection_log import CollectionLog, PREVIEW_LIMIT
+        path = self.root / 'task.collection.jsonl'
+        state = {'job_id': 'task'}
+        log = CollectionLog(path, state)
+        for index in range(PREVIEW_LIMIT + 3):
+            state['collection_preview'] = log.record(dict(asset_id=index, code=f'ABC-{index}', status='success'))
+        resumed = CollectionLog(path, state, resume=True)
+        state['collection_preview'] = resumed.record(dict(asset_id=99, code='ABC-999', status='failed'))
+        self.assertEqual(len(state['collection_preview']), PREVIEW_LIMIT)
+        self.assertEqual(len(path.read_text(encoding='utf-8').splitlines()), PREVIEW_LIMIT + 4)
+        self.assertEqual(state['collection_preview'][-1]['asset_id'], 99)
+
     def test_javdb_candidate_keeps_its_verified_rule_and_source_identity(self):
         from peach.library_processing import _merge_candidates
         from peach.javdb_identity import current_candidate
@@ -1591,6 +1685,74 @@ class LibraryNfoTests(unittest.TestCase):
             with self.assertRaises(NotFound):
                 provider.community('ORETD-618')
         self.assertEqual(javdb.call_count, 4)
+
+    def test_preferred_community_sources_answer_before_fallbacks(self):
+        """JavBus 与 JavDB 给全标量资料后保留后备来源供未取得时使用。"""
+        from peach.collection_source_policy import save
+        from peach.library_processing import LibraryMetadataProvider
+        from peach.jav_cover_fetch import NotFound
+        state = self.root / 'state'
+        save(state, {'preferred_sources': ['javbus','javdb']})
+        provider = LibraryMetadataProvider(self.root / 'secrets', policy_root=state)
+        self.addCleanup(provider.close)
+        payload = dict(title='Title', performers=['Performer'], studio='Studio', release_date='2026-01-01')
+        with patch.object(provider, 'site', return_value=payload) as site:
+            self.assertEqual([source for source, _ in provider.community('IPX-001')], ['javbus','javdb'])
+        self.assertEqual([call.args[0] for call in site.call_args_list], ['javbus','javdb'])
+        def answer(source, code, **kwargs):
+            if source == 'javbus':
+                raise NotFound('来源没有该作品')
+            return payload
+        with patch.object(provider, 'site', side_effect=answer) as site:
+            provider.community('IPX-002')
+        self.assertEqual([call.args[0] for call in site.call_args_list], ['javbus','javdb','avbase'])
+        with patch.object(provider, 'site', return_value=payload) as site:
+            self.assertEqual(provider.community('IPX-003', known=[('javbus', payload), ('javdb', payload)]),
+                             [('javbus', payload), ('javdb', payload)])
+        site.assert_not_called()
+
+    def test_preferred_cover_is_checked_before_official_fallback(self):
+        """优先图源满足既有检查时采用；未取得时继续发行方图源。"""
+        from peach.collection_source_policy import save
+        from peach.jav_cover_fetch import Candidate, NotFound
+        from peach.library_processing import LibraryMetadataProvider
+        state = self.root / 'state'
+        save(state, {'preferred_sources': ['javbus','javdb']})
+        provider = LibraryMetadataProvider(self.root / 'secrets', policy_root=state)
+        self.addCleanup(provider.close)
+        chosen = (Candidate('img.javbus.com', 'https://img.javbus.com/covers/x.jpg'),
+                  (1200,800), b'preferred', ('javdb',))
+        with patch.object(provider, 'community', return_value=[('javbus',{})]), \
+                patch('peach.community_catalog.verified_cover', return_value=chosen), \
+                patch('peach.jav_cover_fetch.best_cover') as official:
+            self.assertTrue(provider.cover('IPX-001', self.root / 'preferred-covers'))
+        official.assert_not_called()
+        fallback = (Candidate('image.mgstage.com','https://image.mgstage.com/f.jpg'), (1200,800), b'fallback')
+        with patch.object(provider, 'community', side_effect=NotFound('未取得')), \
+                patch.object(provider, '_official_candidates', return_value=()), \
+                patch('peach.jav_cover_fetch.best_cover', return_value=fallback) as official:
+            self.assertTrue(provider.cover('IPX-002', self.root / 'preferred-covers'))
+        official.assert_called_once()
+
+    def test_preferred_small_cover_survives_smaller_official_fallback(self):
+        """后备来源图更小且再次核验未取得时，保留已核验的优先来源图。"""
+        from peach.collection_source_policy import save
+        from peach.jav_cover_fetch import Candidate, NotFound
+        from peach.library_processing import LibraryMetadataProvider
+        state = self.root / 'state'
+        save(state, {'preferred_sources': ['javbus', 'javdb']})
+        provider = LibraryMetadataProvider(self.root / 'secrets', policy_root=state)
+        self.addCleanup(provider.close)
+        preferred = (Candidate('img.javbus.com', 'https://img.javbus.com/x.jpg'),
+                     (600, 400), b'preferred', ('javdb',))
+        official = (Candidate('image.mgstage.com', 'https://image.mgstage.com/x.jpg'),
+                    (300, 200), b'official')
+        with patch.object(provider, 'community', return_value=[('javbus', {})]), \
+                patch.object(provider, '_official_candidates', return_value=()), \
+                patch('peach.community_catalog.verified_cover', side_effect=[preferred, NotFound('未取得')]), \
+                patch('peach.jav_cover_fetch.best_cover', return_value=official):
+            self.assertTrue(provider.cover('IPX-004', self.root / 'preferred-small'))
+        self.assertEqual((self.root / 'preferred-small/IPX-004.jpg').read_bytes(), b'preferred')
 
     def test_a_small_official_cover_stays_unless_a_bigger_one_is_confirmed_by_another_origin(self):
         """小封面比没有封面强；社区来源的大图要另一个图源对得上才换上（ADR-0030）。"""

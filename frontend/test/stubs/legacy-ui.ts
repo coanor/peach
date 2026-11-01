@@ -16,7 +16,7 @@ export {boardTabsHtml, formModal, searchInputHtml} from '../../src/ui-kit';
 // 索引骨架复用正式模板，折叠开合、覆盖式滚动条、徽标与读数弹跳、换字、滚动判据与补充信息卡用正式实现。
 export {attachOverlayScrollbar, growCollapse, iconSwapHtml, indexSkeletonHtml, popBadges, popCount, revealTexts, scrollMovesAnchor, setCollapseOpen, setIconSwap, swapText, wireContextCard} from '../../src/ui-kit';
 // 设置面板沿用的互斥视图、拉条、锚定菜单与横向滚动层用正式实现。
-export {closeAnchoredMenu, dialSliderHtml, iconSwitchHtml, wireAnchoredMenu, wireDialSlider, wireHorizontalScroller, wireIconSwitch} from '../../src/ui-kit';
+export {closeAnchoredMenu, dialSliderHtml, iconSwitchHtml, wireAnchoredMenu, wireDialSlider, wireDragReorder, wireHorizontalScroller, wireIconSwitch} from '../../src/ui-kit';
 // 骨架露面的等待门槛用正式那一个数；管理区的加载态用正式模板，骨架交给整页的淡出用正式实现。
 export {configurationSkeletonHtml, revealSkeleton, SKELETON_REVEAL_DELAY, skeletonHtml} from '../../src/ui-kit';
 // 微光的视口照看与底板动画的撤销用正式实现。

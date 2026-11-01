@@ -34,6 +34,7 @@ import {
 } from '../settings/section';
 import { busyProps } from '../settings/use-action';
 import { CustomSources } from './custom-sources';
+import { SourcePolicy } from './source-policy';
 import {
   AMANE_BRIDGE_CHECK_URL, AMANE_BRIDGE_KEY, AMANE_BRIDGE_REBUILD_URL,
   checkText, COOKIE_TEXT_LIMIT, COVER_JOB_KEY, fetchAmaneBridge, fetchCoverJob,
@@ -359,6 +360,7 @@ export function ScrapingPage({ toast }: ScrapingProps) {
   }
   return (
     <Page>
+      {data.collection_policy ? <SourcePolicy initial={data.collection_policy} toast={toast} /> : null}
       <p className="text-body-2-regular text-text-secondary">高清图片可能要经代理才能下载，先检查连接。</p>
       <CoverCard toast={toast} />
       <CustomSources receipt={toast} />

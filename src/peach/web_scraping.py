@@ -149,12 +149,24 @@ def _fetch_cover(contract, code):
 
 
 def q_scraping(contract, _args):
+    from . import collection_source_policy
+    from .metadata_routes import COMMUNITY_STAGE
+    from .update_tasks import state_for
     return {"sources": [describe(contract.follow_secrets_root, source) for source in SOURCES
                         if source != "instagram"],
+            "collection_policy": {**collection_source_policy.read(state_for(contract.db_path).parent),
+                "sources": [{"source": source, "label": SOURCES[source]["label"],
+                             "can_prefer": source in COMMUNITY_STAGE}
+                            for source in collection_source_policy.AVAILABLE]},
             "instagram_status": "Instagram 自动头像定位尚待独立登录会话验证"}
 
 
 def w_scraping_settings(contract, body):
+    if 'collection_policy' in body:
+        from .collection_source_policy import save as save_policy
+        from .update_tasks import state_for
+        return {'ok': True, 'collection_policy': save_policy(
+            state_for(contract.db_path).parent, body['collection_policy'])}
     return {"ok": True, "saved": save(contract.follow_secrets_root, str(body.get("source", "")), body)}
 
 

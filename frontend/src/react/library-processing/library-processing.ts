@@ -22,6 +22,21 @@ export interface LibraryProcessingIssue {
   severity?: 'info' | 'error' | 'paused';
 }
 
+export interface CollectionEvent {
+  asset_id: number;
+  code: string;
+  source: string;
+  label: string;
+  action: string;
+  phase?: string;
+  status: 'running' | 'success' | 'failed' | 'not_found' | 'cached' | 'kept' | 'cancelled';
+  at: number;
+  attempt_id?: string;
+  elapsed_seconds?: number;
+  reason?: string;
+  http_status?: number;
+}
+
 /** 一趟扫描与采集的快照。字段以 `q_library_processing`（`src/peach/web_library_processing.py`）为准。 */
 export interface LibraryProcessingData {
   metadata_only?: boolean;
@@ -38,6 +53,7 @@ export interface LibraryProcessingData {
   eta_scope?: string;
   eta_initial?: boolean;
   job_id?: string;
+  run_id?: number | null;
   stage?: string;
   requested_stage?: string;
   steps?: { id: string; label: string; status: 'pending' | 'current' | 'complete' }[];
@@ -61,6 +77,8 @@ export interface LibraryProcessingData {
   paused_count?: number;
   issue_preview?: LibraryProcessingIssue[];
   issues_log?: string;
+  collection_log?: string;
+  collection_preview?: CollectionEvent[];
   issues_truncated?: boolean;
   retryable_asset_ids?: number[];
   notes?: Record<string, number>;

@@ -33,6 +33,7 @@ import { useLibraryProcessingJob } from './use-library-processing';
 import { setProcessingNoticeVisible, useProcessingNoticeVisibility } from './processing-notice-visibility';
 import { ProcessingActions } from './processing-actions';
 import { ProcessingProgress } from './processing-line';
+import { CollectionActivity } from './collection-activity';
 import { TrafficProgress } from './processing-traffic';
 import { ProcessingControls } from './processing-controls';
 import { downloadIssueList, exportProcessingIssues } from './issue-export';
@@ -243,6 +244,7 @@ export function LibraryProcessingCard(props: LibraryProcessingProps) {
           </p> : null}
           {processingActive(state) ? <TrafficProgress traffic={state.traffic} /> : null}
           {processingActive(state) ? <ProcessingControls state={state} /> : null}
+          <CollectionActivity state={state} />
         </div>
       </Fieldset>
       <Outcome state={state} problem={problem} settled={settled} onRetry={retry} toast={toast} />

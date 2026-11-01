@@ -33,6 +33,7 @@ import { busyProps } from '../settings/use-action';
 import { Disclosure } from '../settings/section';
 import { BackgroundIssues } from './background-issues';
 import { DownloadsPanel } from './downloads-panel';
+import { TaskCollectionActivity } from '../library-processing/collection-activity';
 import { ErrorDetails, ErrorExcerpt } from './error-excerpt';
 import { TaskControlFeedback, TaskControls } from './task-controls';
 import { TaskResources } from './task-resources';
@@ -192,6 +193,7 @@ function RunningRun({ run, followups }: { run: TaskRunPayload; followups?: TaskR
           </div>
         : stopping ? <p data-copy-key={`tasks.control.state.${control}`}
             className="text-caption-1-regular text-text-secondary">{label}</p> : <LoadingDots label={label} />}
+      {run.task_key === 'library-processing' ? <TaskCollectionActivity runId={run.id} /> : null}
     </RunCard>
   );
 }

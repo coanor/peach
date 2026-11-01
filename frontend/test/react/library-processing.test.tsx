@@ -14,6 +14,7 @@ import {
 } from '../../src/react/library-processing/library-processing';
 import { LibraryProcessingCard } from '../../src/react/library-processing/library-processing-card';
 import { LibraryProcessingNotice } from '../../src/react/library-processing/library-processing-notice';
+import { CollectionActivity, collectionRows } from '../../src/react/library-processing/collection-activity';
 import { setProcessingNoticeVisible } from '../../src/react/library-processing/processing-notice-visibility';
 import type { LibraryProcessingProps } from '../../src/react/bundle';
 
@@ -36,6 +37,29 @@ afterEach(() => {
 notifyManager.setScheduler((notify) => notify());
 
 const LOG = 'C:\\peach-data\\state\\library-processing-one.issues.jsonl';
+
+it('采集日志显示当前来源并把同次查询的开始与结果合成一行', async () => {
+  const start = { asset_id: 1, code: 'ABC-123', source: 'javdb', label: 'JavDB', action: 'querying_metadata',
+    at: 1700000000, attempt_id: 'query-one', status: 'running' as const };
+  const end = { ...start, at: start.at + 3, status: 'failed' as const, reason: 'HTTP 503', elapsed_seconds: 3 };
+  expect(collectionRows([start, end])).toEqual([end]);
+  const host = await mount(<CollectionActivity state={{ status: 'running', current_source: { key: 'dmm', label: 'DMM / FANZA' },
+    collection_log: LOG.replace('issues', 'collection'), collection_preview: [start, end] }} />);
+  expect(host.textContent).toContain('当前来源：DMM / FANZA');
+  expect(host.textContent).toContain('失败');
+  expect(host.textContent).toContain('HTTP 503');
+  expect(host.textContent).toContain('3.0 秒');
+  expect(host.querySelectorAll('li')).toHaveLength(1);
+  expect(host.textContent).toContain('完整日志：');
+});
+
+it('采集终态保留记录，未返回的查询标为未取得结果', async () => {
+  const host = await mount(<CollectionActivity state={{ status: 'cancelled',
+    current_source: { key: 'javdb', label: 'JavDB' }, collection_preview: [{ asset_id: 1, code: 'ABC-123',
+      source: 'javdb', label: 'JavDB', action: 'querying_metadata', at: 1700000000, status: 'running' }] }} />);
+  expect(host.textContent).toContain('未取得结果');
+  expect(host.textContent).not.toContain('当前来源：');
+});
 
 it('运行时待补全数量仍可见，同步菜单等待当前任务结束',async()=>{
   const {posts}=await open({status:'running',job_id:'one',new_asset_count:12});
