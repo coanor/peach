@@ -48,10 +48,13 @@ class ScrapingAccessTests(unittest.TestCase):
         save(self.root, 'javdb', {'cookie': 'session=preserved'})
         before = values_for(self.root, 'javdb')
         contract = SimpleNamespace(follow_secrets_root=self.root, db_path=self.root / 'database/ledger.db')
-        policy = {'preferred_sources': ['javbus','javdb'], 'disabled_sources': ['dmm']}
+        policy = {'preferred_sources': ['dmm','r18dev','javbus','javdb'], 'disabled_sources': ['makers']}
         self.assertEqual(w_scraping_settings(contract, {'collection_policy': policy})['collection_policy'], policy)
         self.assertEqual(values_for(self.root, 'javdb'), before)
-        self.assertEqual(q_scraping(contract, {})['collection_policy']['preferred_sources'], ['javbus','javdb'])
+        result = q_scraping(contract, {})['collection_policy']
+        self.assertEqual(result['preferred_sources'], policy['preferred_sources'])
+        self.assertTrue(all(source['can_prefer'] for source in result['sources']))
+        self.assertIn('dmm', [source['source'] for source in result['sources']])
 
     def test_independent_installations_never_share_session_or_proxy(self):
         peach_proxy.save(self.root, {"mode": "proxy", "proxy": "http://user:private-proxy@127.0.0.1:7890"})

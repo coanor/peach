@@ -127,7 +127,8 @@ const collectionPolicy = {
   preferred_sources: [], disabled_sources: [], sources: [
     { source: 'javbus', label: 'JavBus', can_prefer: true },
     { source: 'javdb', label: 'JavDB', can_prefer: true },
-    { source: 'dmm', label: 'DMM', can_prefer: false },
+    { source: 'dmm', label: 'DMM', can_prefer: true },
+    { source: 'r18dev', label: 'r18.dev', can_prefer: true },
   ],
 };
 
@@ -150,6 +151,27 @@ it('来源偏好保存只提交顺序与停用列表，保留凭证卡片', asyn
   } });
   expect(buttonNamed('撤销 Cookie', section(host, 'JavBus')!)).not.toBeNull();
   expect(toast).toHaveBeenCalledWith('采集来源设置已保存，从下一部影片开始使用');
+});
+
+it('来源偏好允许四家优先来源并提交完整顺序', async () => {
+  const { calls, host } = await open({
+    ...quiet(),
+    'GET /api/scraping': () => ({ body: { sources: [source()], collection_policy: collectionPolicy } }),
+    'POST /api/scraping/settings': (body: { collection_policy: unknown }) => ({ body }),
+  });
+  const card = section(host, '馆藏采集来源')!;
+  await click(buttonNamed('优先 JavBus 和 JavDB', card));
+  for (const label of ['DMM', 'r18.dev']) {
+    const row = [...card.querySelectorAll('li')].find((item) => item.textContent?.includes(label))!;
+    await click(buttonNamed('设为优先', row));
+  }
+  expect([...card.querySelectorAll('[data-source-order]')].map((row) => row.getAttribute('data-source-order')))
+    .toEqual(['javbus', 'javdb', 'dmm', 'r18dev']);
+  await click(buttonNamed('保存采集来源', card));
+  await settle();
+  expect(calls.at(-1)?.body).toEqual({ collection_policy: {
+    preferred_sources: ['javbus', 'javdb', 'dmm', 'r18dev'], disabled_sources: [],
+  } });
 });
 
 it('来源偏好保存失败时保留草稿并显示原因', async () => {

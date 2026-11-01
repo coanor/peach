@@ -1741,6 +1741,35 @@ class LibraryNfoTests(unittest.TestCase):
                              [('javbus', payload), ('javdb', payload)])
         site.assert_not_called()
 
+    def test_four_preferred_sources_query_official_and_community_metadata_in_order(self):
+        """四个优先来源依次参与查询，前两站未取得时继续后两站。"""
+        from peach.collection_source_policy import save
+        from peach.library_processing import LibraryMetadataProvider, _RemoteSession, _MissCache, misses_path
+        config = PeachConfig(self.root, self.root / 'config.toml', present=True)
+        save(config.directory('state'), {'preferred_sources': ['dmm', 'r18dev', 'javbus', 'javdb']})
+        provider = LibraryMetadataProvider(self.root / 'secrets', policy_root=config.directory('state'))
+        remote = _RemoteSession(config, lambda: provider, _MissCache(misses_path(config)), retrying=False)
+        self.addCleanup(remote.close)
+        calls = []
+        payload = dict(title='Title', performers=['Performer'], studio='Studio', release_date='2026-01-01',
+                       maker='Studio', actresses=[{'japanese_name': 'Performer'}])
+        def official(code, source, **kwargs):
+            calls.append(source)
+            raise NotFound('来源没有该作品')
+        def community(source, code, **kwargs):
+            calls.append(source)
+            return payload
+        issue = Mock()
+        with (patch.object(provider, 'query', side_effect=official),
+              patch.object(provider, 'site', side_effect=community),
+              patch.object(provider, 'amane', side_effect=NotFound('来源没有该作品')) as fallback):
+            entries = remote._metadata({'id': 1, 'path': 'R:/media/IPX-001.mp4'}, 'IPX-001',
+                ['title', 'performers', 'studio', 'release_date'], update=lambda **values: None, issue=issue)
+        self.assertEqual(calls, ['dmm', 'r18dev', 'javbus', 'javdb'])
+        self.assertEqual([entry[0] for entry in entries], ['javbus', 'javdb'])
+        fallback.assert_not_called()
+        issue.assert_not_called()
+
     def test_preferred_cover_is_checked_before_official_fallback(self):
         """优先图源满足既有检查时采用；未取得时继续发行方图源。"""
         from peach.collection_source_policy import save

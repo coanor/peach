@@ -40,10 +40,26 @@ class CollectionSourcePolicyTests(unittest.TestCase):
             previous = save(root, {'preferred_sources': ['javbus','javdb']})
             for policy in ({'preferred_sources': 'javbus'}, {'disabled_sources': ['unknown']},
                            {'preferred_sources': ['javdb'], 'disabled_sources': ['javdb']},
-                           {'preferred_sources': ['dmm']}):
+                           {'preferred_sources': ['unknown']}):
                 with self.subTest(policy=policy), self.assertRaises(ValueError):
                     save(root, policy)
                 self.assertEqual(read(root), previous)
+
+    def test_every_collection_source_can_be_preferred_without_expanding_its_route(self):
+        """全部馆藏来源可排序，作品仍只查询自身类型的适用来源。"""
+        from peach.collection_source_policy import AVAILABLE, order, read, save
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            preferred = list(reversed(AVAILABLE))
+            self.assertGreater(len(preferred), 3)
+            policy = save(root, {'preferred_sources': preferred})
+            self.assertEqual(read(root)['preferred_sources'], preferred)
+            for code in ('IPX-001', '300MIUM-1239', 'FC2-PPV-1234567'):
+                with self.subTest(code=code):
+                    applicable = route_for_code(code)
+                    self.assertEqual(order(applicable, policy),
+                                     tuple(source for source in preferred if source in applicable))
+            self.assertEqual(order((), policy), ())
 
 
 class ClassifyTests(unittest.TestCase):

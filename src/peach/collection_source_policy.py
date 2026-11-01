@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from .fsutil import atomic_write_text
-from .metadata_routes import COMMUNITY_STAGE, ROUTES
+from .metadata_routes import ROUTES
 
 AVAILABLE = tuple(dict.fromkeys(source for chain in ROUTES.values() for source in chain))
 
@@ -21,8 +21,6 @@ def validate(raw: dict) -> dict:
         result[field] = list(dict.fromkeys(values))
     if set(result['preferred_sources']) & set(result['disabled_sources']):
         raise ValueError('优先来源须保持启用')
-    if any(source not in COMMUNITY_STAGE for source in result['preferred_sources']):
-        raise ValueError('优先来源请选择已登记的社区资料站')
     return result
 
 
