@@ -176,6 +176,8 @@ class CollectionConcurrencyTests(unittest.TestCase):
                 options['received'](entries)
                 if row['id'] == 3:
                     options['issue'](row, '来源未取得')
+                if row['id'] == 2:
+                    options['issue'](row, '来源告知')
                 return entries, 0
             def close(self):
                 pass
@@ -184,7 +186,8 @@ class CollectionConcurrencyTests(unittest.TestCase):
             state.update(values)
         def issue(*args, **kwargs):
             self.assertEqual(threading.get_ident(), owner)
-            state['issue_count'] += 1
+            if args[1] != '来源告知':
+                state['issue_count'] += 1
         def publish(row, code, fields, verify, entries):
             self.assertEqual(threading.get_ident(), owner)
             published.append(row['id'])

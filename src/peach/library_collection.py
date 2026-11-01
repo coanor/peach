@@ -36,6 +36,11 @@ def collect(prepared, remote, traffic, cover_root, covered, *, state, completed_
             active[row['id']]['current_source'] = event['active_source']
         update(**values)
 
+    def record_issue(args, kwargs):
+        before = state['issue_count']
+        issue(*args, **kwargs)
+        return state['issue_count'] != before
+
     def finish(entry, found, covers, had_issue, item_covered):
         nonlocal done
         row, _, _, _, local_entries, local_ok = entry
@@ -62,8 +67,8 @@ def collect(prepared, remote, traffic, cover_root, covered, *, state, completed_
             progress.update({key: value for key, value in values.items() if key in progress})
             on_owner(update_item, row, {**progress, **values})
         def item_issue(*args, **kwargs):
-            problems.append(True)
-            on_owner(issue, *args, **kwargs)
+            if on_owner(record_issue, args, kwargs):
+                problems.append(True)
         def receive(entries):
             on_owner(publish, row, code, fields, verify, entries)
         missing = list(COLLECTED_FIELDS) if verify else _missing_fields(row, fields)
